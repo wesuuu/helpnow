@@ -1,0 +1,11 @@
+clickhouse:
+  defaultUser:
+    allowExternalAccess: true
+  replicasCount: 1
+  service:
+    type: ClusterIP
+  persistence:
+    enabled: true
+    size: 2Gi
+operator:
+  enabled: false

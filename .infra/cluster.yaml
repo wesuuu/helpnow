@@ -1,0 +1,36 @@
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: helpnow-postgres
+  # Namespace handled by Kustomize
+spec:
+  instances: 1
+  
+  storage:
+    size: 1Gi
+  
+  # explicitly set superuser secret to our creds
+  enableSuperuserAccess: true
+  superuserSecret:
+    name: helpnow-postgres-creds
+
+  bootstrap:
+    initdb:
+      database: helpnow
+      owner: postgres
+      # Execute SQL schema
+      postInitApplicationSQLRefs:
+        configMapRefs:
+          - name: helpnow-init-sql
+            key: schema.sql
+      # Credentials for the 'owner' user
+      secret:
+        name: helpnow-postgres-creds
+
+  postgresql:
+    parameters:
+      max_connections: "100"
+      # Ensure password authentication is allowed (md5/scram)
+      # CNPG default is usually strict.
+      # But standard pg_hba usually accepts md5/scram for all users from pod network.
+      # Check pg_hba settings if needed, but start with superuserSecret.

@@ -1,0 +1,179 @@
+package main
+
+import (
+	"log"
+	"net/http"
+	"os"
+
+	"github.com/joho/godotenv"
+	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v4/middleware"
+	"github.com/wesuuu/helpnow/backend/clients"
+	"github.com/wesuuu/helpnow/backend/db"
+	"github.com/wesuuu/helpnow/backend/handlers"
+	"github.com/wesuuu/helpnow/backend/scheduler"
+)
+
+func main() {
+	// Load .env file
+	if err := godotenv.Load("../.env"); err != nil {
+		// Try root .env if ../.env fails (depending on where we run from)
+		_ = godotenv.Load()
+	}
+
+	// Initialize Database
+	db.InitDB()
+
+	// Initialize Echo
+	e := echo.New()
+
+	// Middleware
+	// Middleware
+	e.Use(middleware.LoggerWithConfig(middleware.LoggerConfig{
+		Format: "${time_rfc3339} | ${status} | ${latency_human} | ${method} ${uri}\n",
+	}))
+	e.Use(middleware.Recover())
+	e.Use(middleware.CORS())
+
+	// Routes
+	e.GET("/", func(c echo.Context) error {
+		return c.String(http.StatusOK, "HelpNow AI Management API is running")
+	})
+
+	e.GET("/health", func(c echo.Context) error {
+		if err := db.GetDB().Ping(); err != nil {
+			return c.JSON(http.StatusServiceUnavailable, map[string]string{"status": "db_down"})
+		}
+		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
+	})
+
+	// Initialize AI Client
+	clients.InitAIClient()
+	defer clients.GlobalAIClient.Close()
+
+	// Auth
+	e.POST("/register", handlers.Register)
+	e.POST("/login", handlers.Login)
+
+	// Agents
+	e.POST("/agents", handlers.CreateAgent)
+	e.GET("/agents", handlers.ListAgents)
+
+	// Routines
+	e.POST("/routines", handlers.CreateRoutine)
+
+	// Migration fix/init
+	db.GetDB().Exec("ALTER TABLE organizations ADD COLUMN IF NOT EXISTS system_prompt TEXT")
+	db.GetDB().Exec("ALTER TABLE sites ADD COLUMN IF NOT EXISTS tracking_id TEXT UNIQUE")
+
+	// Workflow Migrations
+	db.GetDB().Exec("ALTER TABLE workflows ADD COLUMN IF NOT EXISTS organization_id INTEGER REFERENCES organizations(id)")
+	// Wait, let's stick to plan: 'schedule'
+	db.GetDB().Exec("ALTER TABLE workflows ADD COLUMN IF NOT EXISTS schedule TEXT")
+	db.GetDB().Exec("ALTER TABLE workflows ADD COLUMN IF NOT EXISTS audience_id INTEGER REFERENCES audiences(id)")
+	db.GetDB().Exec("ALTER TABLE workflows ADD COLUMN IF NOT EXISTS next_run_at TIMESTAMP WITH TIME ZONE")
+	db.GetDB().Exec("ALTER TABLE workflows ALTER COLUMN site_id DROP NOT NULL")
+	db.GetDB().Exec("ALTER TABLE workflows ALTER COLUMN trigger_event DROP NOT NULL")
+
+	// Create tables if they didn't exist
+	// Tables are handled by schema.sql migration logic below
+
+	// People & Audience Members
+	e.POST("/people", handlers.CreatePerson)
+	e.GET("/people", handlers.ListPeople)
+	e.POST("/audiences/:id/members", handlers.AddPersonToAudience)
+	e.GET("/audiences/:id/members", handlers.GetAudienceMembers)
+
+	// Signup Campaigns
+	e.POST("/signup-campaigns", handlers.CreateSignupCampaign)
+	e.GET("/signup-campaigns", handlers.ListSignupCampaigns)
+	e.POST("/public/capture/:token", handlers.CaptureLead)
+	e.POST("/public/analytics", handlers.TrackEvent)
+
+	// Sites
+	e.POST("/sites", handlers.CreateSite)
+	e.GET("/sites", handlers.ListSites)
+	e.GET("/sites/:id", handlers.GetSite)
+	e.GET("/sites/:id/stats", handlers.GetSiteStats)
+
+	// Workflows & Events
+	e.POST("/workflows", handlers.CreateWorkflow)
+	e.GET("/workflows", handlers.ListWorkflows)
+	e.POST("/events/definitions", handlers.CreateEventDefinition)
+	e.GET("/events/definitions", handlers.ListEventDefinitions)
+
+	// Data Sources & Syncs
+	e.POST("/sources", handlers.CreateDataSource)
+	e.GET("/sources", handlers.ListDataSources)
+	e.POST("/syncs", handlers.CreateDataSync)
+	e.GET("/syncs", handlers.ListDataSyncs)
+
+	// Seed Organization 1 if not exists
+	var count int
+	db.GetDB().QueryRow("SELECT COUNT(*) FROM organizations WHERE id = 1").Scan(&count)
+	if count == 0 {
+		_, err := db.GetDB().Exec("INSERT INTO organizations (id, name, system_prompt) VALUES (1, 'Acme Corp', '')")
+		if err != nil {
+			e.Logger.Fatal("Failed to seed organization:", err)
+		}
+	}
+
+	// Routes
+	e.GET("/routines", handlers.ListRoutines)
+	e.POST("/routines/execute", handlers.ExecuteRoutine)
+
+	// Organizations
+	e.GET("/organizations/:id", handlers.GetOrganization)
+	e.PUT("/organizations/:id", handlers.UpdateOrganization)
+
+	// Integrations
+	e.POST("/integrations", handlers.CreateIntegration)
+	e.GET("/integrations", handlers.ListIntegrations)
+
+	// Audiences
+	e.POST("/audiences", handlers.CreateAudience)
+	e.GET("/audiences", handlers.ListAudiences)
+	e.POST("/audiences/segments", handlers.CreateAudienceSegment)
+
+	// Campaigns
+	e.POST("/campaigns", handlers.CreateCampaign)
+	e.GET("/email-domains", handlers.ListEmailDomains)
+	e.POST("/email-domains", handlers.CreateEmailDomain)
+	e.POST("/email-domains/:id/verify", handlers.VerifyEmailDomain)
+	e.DELETE("/email-domains/:id", handlers.DeleteEmailDomain)
+
+	// Email Templates
+	e.GET("/email-templates", handlers.ListEmailTemplates)
+	e.POST("/email-templates", handlers.CreateEmailTemplate)
+	e.PUT("/email-templates/:id", handlers.UpdateEmailTemplate)
+	e.DELETE("/email-templates/:id", handlers.DeleteEmailTemplate)
+
+	e.GET("/campaigns", handlers.ListCampaigns)
+	e.POST("/campaigns/:id/content", handlers.GenerateCampaignContent) // POST to trigger generation
+	e.PUT("/campaigns/:id", handlers.UpdateCampaign)
+	e.GET("/campaigns/:id/runs", handlers.ListCampaignRuns)
+
+	// Start Scheduler
+	scheduler.Start()
+
+	// Simple Migration (MVP)
+	schema, err := os.ReadFile("schema.sql")
+	if err == nil {
+		_, err = db.GetDB().Exec(string(schema))
+		if err != nil {
+			log.Println("Schema migration warning:", err)
+		} else {
+			log.Println("Schema migrated successfully")
+		}
+	} else {
+		log.Println("schema.sql not found, skipping migration")
+	}
+
+	// Start Server
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
+	log.Println("Starting server on port " + port)
+	e.Logger.Fatal(e.Start(":" + port))
+}

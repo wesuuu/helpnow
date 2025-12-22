@@ -1,0 +1,18 @@
+# .infra/values.yaml (for postgres/postgres)
+
+# Credentials
+environmentVariables:
+  POSTGRES_USER: user
+  POSTGRES_PASSWORD: password
+  POSTGRES_DB: helpnow
+
+# Service Port Remapping
+service:
+  type: LoadBalancer
+  port: 5555
+
+# Persistence
+volume:
+  enabled: true
+  size: 1Gi
+  mountPath: /var/lib/postgresql/data
