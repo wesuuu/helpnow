@@ -130,7 +130,7 @@
                 label: label || type,
                 action: "",
                 force: "", // For condition nodes
-                handlePosition: "right",
+                handlePosition: "left",
             },
         };
 
@@ -521,12 +521,6 @@
                             onclick={() => addNode("ACTION", "New Action")}
                             class="w-full text-left px-3 py-2 bg-blue-50 text-blue-700 rounded hover:bg-blue-100 text-sm font-medium"
                             >+ Action Node</button
-                        >
-                        <button
-                            onclick={() =>
-                                addNode("CONDITION", "New Condition")}
-                            class="w-full text-left px-3 py-2 bg-yellow-50 text-yellow-700 rounded hover:bg-yellow-100 text-sm font-medium"
-                            >+ Condition Node</button
                         >
                     </div>
                 </div>

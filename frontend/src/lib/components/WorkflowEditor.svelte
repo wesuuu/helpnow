@@ -7,11 +7,13 @@
         type Node,
         type Edge,
         type NodeEventWithPointer,
+        type Connection,
     } from "@xyflow/svelte";
     import "@xyflow/svelte/dist/style.css";
 
     import TriggerNode from "./nodes/TriggerNode.svelte";
     import ActionNode from "./nodes/ActionNode.svelte";
+    import DeletableEdge from "./edges/DeletableEdge.svelte";
     import ContextMenu from "./ContextMenu.svelte";
 
     // Props
@@ -31,74 +33,114 @@
         ACTION: ActionNode,
     };
 
+    // Edge Types
+    const edgeTypes = {
+        deletable: DeletableEdge,
+    };
+
+    // Connection Validation
+    const isValidConnection = (connection: Connection | Edge) => {
+        // Allow strictly one edge per source handle for ACTION nodes (and generally)
+        // Check if there is already an edge with the same source and sourceHandle
+        const existingEdge = edges.find(
+            (e) =>
+                e.source === connection.source &&
+                e.sourceHandle === connection.sourceHandle,
+        );
+
+        // If existing edge is found, prevent new connection (User must delete first)
+        // Or we could silently replace. But user request "single node can only have a single edge"
+        // implies a constraint.
+        if (existingEdge) return false;
+
+        return true;
+    };
+
     // Context Menu State
-    let contextMenu = $state<{ x: number; y: number; nodeId: string } | null>(
-        null,
-    );
+    let contextMenu = $state<{
+        x: number;
+        y: number;
+        cx: number;
+        cy: number;
+        id: string; // Optional for pane
+        type: "node" | "edge" | "pane";
+    } | null>(null);
     let containerRef: HTMLDivElement;
 
-    function onNodeClick(e: CustomEvent) {
-        selectedNodeId = e.detail.node.id;
+    function onNodeClick({ node }: { node: Node }) {
+        selectedNodeId = node.id;
     }
 
     const onNodeContextMenu: NodeEventWithPointer<MouseEvent> = ({
         event,
         node,
     }) => {
-        // e.detail.event is the original MouseEvent
         event.preventDefault();
         const mouseEvent = event as MouseEvent;
         if (mouseEvent) {
             mouseEvent.preventDefault();
-            console.log("Context Menu Triggered", mouseEvent);
         }
 
-        // Helper to find the node type
         if (node && (node.type === "ACTION" || node.type === "TRIGGER")) {
-            // Get the container rect to position relative to it
             const rect = containerRef?.getBoundingClientRect();
-
-            // Calculate x/y relative to the flow container
             const x = rect
                 ? mouseEvent.clientX - rect.left
                 : mouseEvent.clientX;
             const y = rect ? mouseEvent.clientY - rect.top : mouseEvent.clientY;
 
-            console.log("Setting Context Menu at", { x, y });
-
             contextMenu = {
                 x,
                 y,
-                nodeId: node.id,
+                cx: mouseEvent.clientX,
+                cy: mouseEvent.clientY,
+                id: node.id,
+                type: "node",
             };
         } else {
-            console.log("Node not actionable for context menu");
             contextMenu = null;
         }
     };
 
+    const onEdgeContextMenu = ({
+        event,
+        edge,
+    }: {
+        event: MouseEvent;
+        edge: Edge;
+    }) => {
+        event.preventDefault();
+        const rect = containerRef?.getBoundingClientRect();
+        const x = rect ? event.clientX - rect.left : event.clientX;
+        const y = rect ? event.clientY - rect.top : event.clientY;
+
+        contextMenu = {
+            x,
+            y,
+            cx: event.clientX,
+            cy: event.clientY,
+            id: edge.id,
+            type: "edge",
+        };
+    };
+
+    const onPaneContextMenu = ({ event }: { event: MouseEvent }) => {
+        event.preventDefault();
+        const rect = containerRef?.getBoundingClientRect();
+        const x = rect ? event.clientX - rect.left : event.clientX;
+        const y = rect ? event.clientY - rect.top : event.clientY;
+
+        contextMenu = {
+            x,
+            y,
+            cx: event.clientX,
+            cy: event.clientY,
+            id: "", // No specific ID for pane
+            type: "pane",
+        };
+    };
+
     function onPaneClick() {
         selectedNodeId = null;
-        contextMenu = null;
-    }
-
-    function toggleHandlePosition() {
-        if (!contextMenu) return;
-        const index = nodes.findIndex((n) => n.id === contextMenu!.nodeId);
-        if (index !== -1) {
-            const node = nodes[index];
-            const current = node.data.handlePosition || "right";
-            const newVal = current === "right" ? "left" : "right";
-
-            // Re-assign to trigger reactivity
-            nodes[index] = {
-                ...node,
-                data: {
-                    ...node.data,
-                    handlePosition: newVal,
-                },
-            };
-        }
         contextMenu = null;
     }
 </script>
@@ -112,9 +154,15 @@
             bind:nodes
             bind:edges
             {nodeTypes}
+            {edgeTypes}
+            defaultEdgeOptions={{ type: "deletable", animated: true }}
+            {isValidConnection}
             fitView
+            onnodeclick={onNodeClick}
             onpointerdown={onPaneClick}
             onnodecontextmenu={onNodeContextMenu}
+            onedgecontextmenu={onEdgeContextMenu}
+            onpanecontextmenu={onPaneContextMenu}
             onpaneclick={onPaneClick}
         >
             <Background />
@@ -123,9 +171,12 @@
         {#if contextMenu}
             <ContextMenu
                 onclick={onPaneClick}
-                id={contextMenu.nodeId}
+                id={contextMenu.id}
+                type={contextMenu.type}
                 top={contextMenu.y}
                 left={contextMenu.x}
+                cx={contextMenu.cx}
+                cy={contextMenu.cy}
                 right={undefined}
                 bottom={undefined}
             />

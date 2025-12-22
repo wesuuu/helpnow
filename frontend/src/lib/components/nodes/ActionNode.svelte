@@ -1,17 +1,29 @@
 <script lang="ts">
-    import { Handle, Position, type NodeProps } from "@xyflow/svelte";
+    import {
+        Handle,
+        Position,
+        useUpdateNodeInternals,
+        type NodeProps,
+    } from "@xyflow/svelte";
 
     type $$Props = NodeProps;
 
-    export let data: {
-        label: string;
-        action?: string;
-        handlePosition?: "left" | "right"; // New property
-    };
+    let { id, data }: NodeProps = $props();
 
-    // Default to 'right' if not specified
-    $: position = data.handlePosition || "right";
-    $: isRight = position === "right";
+    const updateNodeInternals = useUpdateNodeInternals();
+
+    // Default to 'left' if not specified
+    const position = $derived(data.handlePosition || "left");
+    const isRight = $derived(position === "right");
+
+    $effect(() => {
+        // Access position to track changes
+        const _ = position;
+        // Run updateNodeInternals in the next tick/timeout to ensure DOM handles are rendered
+        setTimeout(() => {
+            updateNodeInternals(id);
+        }, 0);
+    });
 </script>
 
 <div
@@ -35,7 +47,7 @@
         class={`absolute top-1/2 transform -translate-y-1/2 flex flex-col gap-3 ${isRight ? "right-0 -mr-3" : "left-0 -ml-3"}`}
     >
         <!-- Success -->
-        <div class="relative group">
+        <div class="relative group/handle">
             <Handle
                 type="source"
                 position={isRight ? Position.Right : Position.Left}
@@ -44,13 +56,13 @@
                 style="top: 0; position: relative;"
             />
             <span
-                class={`absolute top-1/2 -translate-y-1/2 text-[10px] text-green-600 font-bold opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap bg-white px-1 rounded shadow-sm ${isRight ? "left-full ml-2" : "right-full mr-2"}`}
+                class={`absolute top-1/2 -translate-y-1/2 text-[10px] text-green-600 font-bold opacity-0 group-hover/handle:opacity-100 transition-opacity whitespace-nowrap bg-white px-1 rounded shadow-sm ${isRight ? "left-full ml-2" : "right-full mr-2"}`}
                 >OK</span
             >
         </div>
 
         <!-- Failure -->
-        <div class="relative group">
+        <div class="relative group/handle">
             <Handle
                 type="source"
                 position={isRight ? Position.Right : Position.Left}
@@ -59,13 +71,13 @@
                 style="top: 0; position: relative;"
             />
             <span
-                class={`absolute top-1/2 -translate-y-1/2 text-[10px] text-red-600 font-bold opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap bg-white px-1 rounded shadow-sm ${isRight ? "left-full ml-2" : "right-full mr-2"}`}
+                class={`absolute top-1/2 -translate-y-1/2 text-[10px] text-red-600 font-bold opacity-0 group-hover/handle:opacity-100 transition-opacity whitespace-nowrap bg-white px-1 rounded shadow-sm ${isRight ? "left-full ml-2" : "right-full mr-2"}`}
                 >FAIL</span
             >
         </div>
 
         <!-- Always -->
-        <div class="relative group">
+        <div class="relative group/handle">
             <Handle
                 type="source"
                 position={isRight ? Position.Right : Position.Left}
@@ -74,7 +86,7 @@
                 style="top: 0; position: relative;"
             />
             <span
-                class={`absolute top-1/2 -translate-y-1/2 text-[10px] text-gray-600 font-bold opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap bg-white px-1 rounded shadow-sm ${isRight ? "left-full ml-2" : "right-full mr-2"}`}
+                class={`absolute top-1/2 -translate-y-1/2 text-[10px] text-gray-600 font-bold opacity-0 group-hover/handle:opacity-100 transition-opacity whitespace-nowrap bg-white px-1 rounded shadow-sm ${isRight ? "left-full ml-2" : "right-full mr-2"}`}
                 >ANY</span
             >
         </div>

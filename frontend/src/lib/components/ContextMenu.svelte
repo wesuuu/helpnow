@@ -1,5 +1,9 @@
 <script lang="ts">
-    import { useNodes } from "@xyflow/svelte";
+    import {
+        useNodes,
+        useUpdateNodeInternals,
+        useSvelteFlow,
+    } from "@xyflow/svelte";
 
     let {
         id,
@@ -8,6 +12,9 @@
         right,
         bottom,
         onclick,
+        type = "node",
+        cx,
+        cy,
     }: {
         id: string;
         top: number | undefined;
@@ -15,9 +22,14 @@
         right: number | undefined;
         bottom: number | undefined;
         onclick: () => void;
+        type?: "node" | "edge" | "pane";
+        cx?: number;
+        cy?: number;
     } = $props();
 
     const nodes = useNodes();
+    const updateNodeInternals = useUpdateNodeInternals();
+    const { deleteElements, screenToFlowPosition } = useSvelteFlow();
 
     function switchHandlePosition() {
         const nodeIndex = nodes.current.findIndex((n) => n.id === id);
@@ -39,7 +51,44 @@
             const newNodes = [...nodes.current];
             newNodes[nodeIndex] = updatedNode;
             nodes.set(newNodes);
+
+            // Force update node internals to fix edge positions
+            // We need to wait for the DOM to update, so requestAnimationFrame or setTimeout might be needed
+            // but usually calling it after set is enough if reactive.
+            // Let's wrap in setTimeout to be safe as the DOM needs to reflow first.
+            setTimeout(() => {
+                updateNodeInternals(id);
+            }, 0);
         }
+        if (onclick) onclick();
+    }
+
+    async function deleteItem() {
+        if (type === "node") {
+            // We need to pass the full node object or just ID? deleteElements takes { nodes: [{ id: '...' }], edges: [] }
+            // Actually it accepts partials with id.
+            await deleteElements({ nodes: [{ id }] });
+        } else if (type === "edge") {
+            await deleteElements({ edges: [{ id }] });
+        }
+        if (onclick) onclick();
+    }
+
+    function addActionNode() {
+        if (cx === undefined || cy === undefined) return;
+        const pos = screenToFlowPosition({ x: cx, y: cy });
+        const newNode = {
+            id: `n-${Date.now()}`,
+            type: "ACTION",
+            position: pos,
+            data: {
+                label: "New Action",
+                handlePosition: "left", // Default
+            },
+        };
+
+        const newNodes = [...nodes.current, newNode];
+        nodes.set(newNodes);
         if (onclick) onclick();
     }
 </script>
@@ -50,10 +99,26 @@
     {onclick}
     onpointerdown={(e) => e.stopPropagation()}
 >
-    <p style="margin: 0.5em;">
-        <small>node: {id}</small>
-    </p>
-    <button onclick={switchHandlePosition}>Switch Handles Side</button>
+    {#if type === "pane"}
+        <p style="margin: 0.5em;"><small>Menu</small></p>
+        <button onclick={addActionNode}>Add Action Node</button>
+    {:else}
+        <p style="margin: 0.5em;">
+            <small>{type}: {id}</small>
+        </p>
+    {/if}
+
+    {#if type === "node"}
+        <button onclick={switchHandlePosition}>Switch Handles Side</button>
+        <button onclick={deleteItem} class="text-red-500 hover:!bg-red-50"
+            >Delete Node</button
+        >
+    {/if}
+    {#if type === "edge"}
+        <button onclick={deleteItem} class="text-red-500 hover:!bg-red-50"
+            >Delete Edge</button
+        >
+    {/if}
 </div>
 
 <style>
