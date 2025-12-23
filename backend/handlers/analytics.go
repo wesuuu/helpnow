@@ -94,14 +94,14 @@ func TrackEvent(c echo.Context) error {
 	var insertQuery string
 	switch event.EventType {
 	case "impression":
-		insertQuery = `INSERT INTO impressions (organization_id, campaign_id, count, meta) VALUES (?, ?, 1, ?)`
-		_, err = ch.Exec(insertQuery, uint64(organizationID), uint64(campaignID), metaStr)
+		insertQuery = `INSERT INTO impressions (organization_id, meta) VALUES (?, ?)`
+		_, err = ch.Exec(insertQuery, uint64(organizationID), metaStr)
 	case "click":
-		insertQuery = `INSERT INTO click_rate (organization_id, campaign_id, clicks, meta) VALUES (?, ?, 1, ?)`
-		_, err = ch.Exec(insertQuery, uint64(organizationID), uint64(campaignID), metaStr)
+		insertQuery = `INSERT INTO click_rate (organization_id, meta) VALUES (?, ?)`
+		_, err = ch.Exec(insertQuery, uint64(organizationID), metaStr)
 	case "conversion":
-		insertQuery = `INSERT INTO cpa (organization_id, campaign_id, cost, meta) VALUES (?, ?, ?, ?)`
-		_, err = ch.Exec(insertQuery, uint64(organizationID), uint64(campaignID), event.Value, metaStr)
+		insertQuery = `INSERT INTO cpa (organization_id, cost, meta) VALUES (?, ?, ?)`
+		_, err = ch.Exec(insertQuery, uint64(organizationID), event.Value, metaStr)
 	default:
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Unknown event type"})
 	}

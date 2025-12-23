@@ -10,6 +10,7 @@ import (
 
 	_ "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/labstack/echo/v4"
+	"github.com/wesuuu/helpnow/backend/db"
 )
 
 type SiteStats struct {
@@ -46,23 +47,33 @@ func GetSiteStats(c echo.Context) error {
 	}
 	defer ch.Close()
 
+	// Init Stats
 	stats := SiteStats{}
+
+	// Lookup Organization ID
+	var organizationID int
+	err = db.GetDB().QueryRow("SELECT organization_id FROM sites WHERE id = $1", siteID).Scan(&organizationID)
+	if err != nil {
+		c.Logger().Error("Failed to lookup site org:", err)
+		// Return empty stats
+		return c.JSON(http.StatusOK, stats)
+	}
 
 	// 1. Get Aggregated Stats
 	// Using UNION ALL or separate queries. Separate queries are safer/easier for simple key-value structure.
 
 	// Impressions
 	err = ch.QueryRow(`
-		SELECT count(*) FROM impressions WHERE campaign_id = ?
-	`, siteID).Scan(&stats.Stats.Impressions)
+		SELECT count(*) FROM impressions WHERE organization_id = ?
+	`, organizationID).Scan(&stats.Stats.Impressions)
 	if err != nil && err != sql.ErrNoRows {
 		c.Logger().Error("Failed to query impressions: ", err)
 	}
 
 	// Clicks
 	err = ch.QueryRow(`
-		SELECT count(*) FROM click_rate WHERE campaign_id = ?
-	`, siteID).Scan(&stats.Stats.Clicks)
+		SELECT count(*) FROM click_rate WHERE organization_id = ?
+	`, organizationID).Scan(&stats.Stats.Clicks)
 	if err != nil && err != sql.ErrNoRows {
 		c.Logger().Error("Failed to query clicks: ", err)
 	}
@@ -70,8 +81,8 @@ func GetSiteStats(c echo.Context) error {
 	// Conversions & Cost
 	// cpa table has 'cost' column. We can count rows for conversions and sum cost.
 	err = ch.QueryRow(`
-		SELECT count(*), coalesce(sum(cost), 0) FROM cpa WHERE campaign_id = ?
-	`, siteID).Scan(&stats.Stats.Conversions, &stats.Stats.Cost)
+		SELECT count(*), coalesce(sum(cost), 0) FROM cpa WHERE organization_id = ?
+	`, organizationID).Scan(&stats.Stats.Conversions, &stats.Stats.Cost)
 	if err != nil && err != sql.ErrNoRows {
 		c.Logger().Error("Failed to query conversions: ", err)
 	}
@@ -83,11 +94,11 @@ func GetSiteStats(c echo.Context) error {
 	// Check max created_at across tables
 	query := `
 		SELECT max(t) FROM (
-			SELECT max(created_at) as t FROM impressions WHERE campaign_id = ?
+			SELECT max(created_at) as t FROM impressions WHERE organization_id = ?
 			UNION ALL
-			SELECT max(created_at) as t FROM click_rate WHERE campaign_id = ?
+			SELECT max(created_at) as t FROM click_rate WHERE organization_id = ?
 			UNION ALL
-			SELECT max(created_at) as t FROM cpa WHERE campaign_id = ?
+			SELECT max(created_at) as t FROM cpa WHERE organization_id = ?
 		)
 	`
 	// ClickHouse might return a zero date or null if empty.
@@ -97,7 +108,7 @@ func GetSiteStats(c echo.Context) error {
 	// Note: Parameter placeholder `?` works in clickhouse-go if setup correctly, but sometimes `$1` is used.
 	// analytics.go used `?`.
 
-	rows, err := ch.Query(query, siteID, siteID, siteID)
+	rows, err := ch.Query(query, organizationID, organizationID, organizationID)
 	if err != nil {
 		c.Logger().Error("Failed to query last event: ", err)
 	} else {
