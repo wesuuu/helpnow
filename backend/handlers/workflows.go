@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/labstack/echo/v4"
+	"github.com/lib/pq"
 	"github.com/wesuuu/helpnow/backend/db"
 )
 
@@ -69,13 +70,63 @@ func CreateWorkflow(c echo.Context) error {
 		wf.OrganizationID = &orgID
 	}
 
+	// Create Workflow Record
 	query := `INSERT INTO workflows (organization_id, site_id, audience_id, name, trigger_type, trigger_event, steps, schedule, next_run_at, status) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id, created_at`
+	// For legacy support/display, we might still want to populate trigger_type/schedule in the main table if we have a primary trigger?
+	// But let's assume we just save them blank or as "multiple" if we move fully?
+	// For now, keep saving them as is (binding form input) BUT ALSO parse graph.
 	err := db.GetDB().QueryRow(query, wf.OrganizationID, wf.SiteID, wf.AudienceID, wf.Name, wf.TriggerType, wf.TriggerEvent, wf.Steps, wf.Schedule, wf.NextRunAt, "ACTIVE").Scan(&wf.ID, &wf.CreatedAt)
 	if err != nil {
 		c.Logger().Error("Failed to create workflow: ", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to create workflow"})
 	}
 	wf.Status = "ACTIVE"
+
+	// Parse Graph to extract Triggers
+	type GraphNode struct {
+		ID         string                 `json:"id"`
+		Type       string                 `json:"type"`
+		Properties map[string]interface{} `json:"properties"`
+	}
+	type GraphStruct struct {
+		Nodes []GraphNode `json:"nodes"`
+	}
+
+	var graph GraphStruct
+	if err := json.Unmarshal([]byte(wf.Steps), &graph); err == nil {
+		for _, node := range graph.Nodes {
+			if node.Type == "TRIGGER" {
+				// Determine Type
+				tType := "EVENT" // Default
+				if val, ok := node.Properties["trigger_type"].(string); ok {
+					tType = val
+				} else if node.Properties["cron"] != nil {
+					tType = "SCHEDULE"
+				}
+
+				// Build Config JSON
+				configBytes, _ := json.Marshal(node.Properties)
+				configJSON := string(configBytes)
+
+				// Determine Next Run (if schedule)
+				var nextRun sql.NullTime
+				if tType == "SCHEDULE" {
+					nextRun.Time = time.Now() // Run immediately/soon
+					nextRun.Valid = true
+				}
+
+				_, err := db.GetDB().Exec(`
+					INSERT INTO workflow_triggers (workflow_id, node_id, type, config, next_run_at)
+					VALUES ($1, $2, $3, $4, $5)
+				`, wf.ID, node.ID, tType, configJSON, nextRun)
+				
+				if err != nil {
+					c.Logger().Error("Failed to save trigger:", err)
+				}
+			}
+		}
+	}
+
 	return c.JSON(http.StatusCreated, wf)
 }
 
@@ -140,7 +191,15 @@ func CreateEventDefinition(c echo.Context) error {
 
 func ListEventDefinitions(c echo.Context) error {
 	siteID := c.QueryParam("site_id")
-	rows, err := db.GetDB().Query(`SELECT id, site_id, name, description, created_at FROM event_definitions WHERE site_id = $1 ORDER BY name ASC`, siteID)
+	var rows *sql.Rows
+	var err error
+
+	if siteID != "" {
+		rows, err = db.GetDB().Query(`SELECT id, site_id, name, description, created_at FROM event_definitions WHERE site_id = $1 ORDER BY name ASC`, siteID)
+	} else {
+		rows, err = db.GetDB().Query(`SELECT id, site_id, name, description, created_at FROM event_definitions ORDER BY name ASC`)
+	}
+
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to list events"})
 	}
@@ -160,7 +219,14 @@ func ListEventDefinitions(c echo.Context) error {
 
 func TriggerWorkflow(siteID int, eventName string, contextData map[string]interface{}) error {
 	// 1. Find active workflows for this site and event
-	rows, err := db.GetDB().Query(`SELECT id FROM workflows WHERE site_id = $1 AND trigger_event = $2 AND status = 'ACTIVE'`, siteID, eventName)
+	// query both legacy columns (if we want to support old workflows) and new table.
+	// For now, let's assume we migrated or only support new table
+	rows, err := db.GetDB().Query(`
+		SELECT wt.workflow_id, wt.node_id, wt.config 
+		FROM workflow_triggers wt 
+		JOIN workflows w ON wt.workflow_id = w.id 
+		WHERE wt.type = 'EVENT' AND w.status = 'ACTIVE'
+	`)
 	if err != nil {
 		return err
 	}
@@ -168,19 +234,85 @@ func TriggerWorkflow(siteID int, eventName string, contextData map[string]interf
 
 	contextJSON, _ := json.Marshal(contextData)
 
+	type TriggerConfig struct {
+		TriggerEvent string `json:"trigger_event"`
+		SiteIDs      []int  `json:"site_ids"`
+		AudienceIDs  []int  `json:"audience_ids"`
+	}
+
 	for rows.Next() {
 		var workflowID int
-		if err := rows.Scan(&workflowID); err == nil {
+		var nodeID, configStr string
+		if err := rows.Scan(&workflowID, &nodeID, &configStr); err == nil {
+			// Check Config
+			var config TriggerConfig
+			if err := json.Unmarshal([]byte(configStr), &config); err != nil {
+				continue
+			}
+
+			// 1. Check Event Name
+			if config.TriggerEvent != eventName {
+				continue
+			}
+
+			// 2. Check Site ID (if SiteIDs is not empty)
+			// If SiteIDs is empty, maybe run for all? Or run for none? 
+			// Frontend: "Select logic: OR (Run if event happens on any selected site)". 
+			// If empty, probably shouldn't run unless it means "All"?
+			// Let's assume empty means "None selected" so don't run.
+			// Unless we add an "All Sites" flag. For now, strict check.
+			siteMatch := false
+			if len(config.SiteIDs) > 0 {
+				siteMatch = false
+				for _, sid := range config.SiteIDs {
+					if sid == siteID {
+						siteMatch = true
+						break
+					}
+				}
+				if !siteMatch {
+					continue
+				}
+			}
+
+			// Check Audience Filter
+			if len(config.AudienceIDs) > 0 {
+				email, ok := contextData["email"].(string)
+				if !ok || email == "" {
+					email, ok = contextData["user_email"].(string)
+				}
+
+				if !ok || email == "" {
+					// Cannot verify audience without email
+					continue
+				}
+
+				var count int
+				err := db.GetDB().QueryRow(`
+					SELECT COUNT(*) 
+					FROM audience_memberships am
+					JOIN people p ON am.person_id = p.id
+					WHERE p.email = $1 AND am.audience_id = ANY($2)
+				`, email, pq.Array(config.AudienceIDs)).Scan(&count)
+
+				if err != nil || count == 0 {
+					continue
+				}
+				if err != nil || count == 0 {
+					continue
+				}
+			}
+
 			// 2. Create Execution
 			_, err := db.GetDB().Exec(`
-				INSERT INTO workflow_executions (workflow_id, status, context, next_run_at) 
-				VALUES ($1, 'PENDING', $2, NOW())`,
-				workflowID, string(contextJSON))
+				INSERT INTO workflow_executions (workflow_id, current_node_id, status, context, next_run_at) 
+				VALUES ($1, $2, 'PENDING', $3, NOW())`,
+				workflowID, nodeID, string(contextJSON))
 			if err != nil {
-				// Log but continue
 				// fmt.Println("Failed to trigger execution:", err)
 			}
 		}
 	}
+
 	return nil
 }

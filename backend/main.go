@@ -75,6 +75,22 @@ func main() {
 	db.GetDB().Exec("ALTER TABLE workflows ALTER COLUMN site_id DROP NOT NULL")
 	db.GetDB().Exec("ALTER TABLE workflows ALTER COLUMN trigger_event DROP NOT NULL")
 
+	// Triggers
+	db.GetDB().Exec(`CREATE TABLE IF NOT EXISTS workflow_triggers (
+		id SERIAL PRIMARY KEY,
+		workflow_id INTEGER REFERENCES workflows(id),
+		node_id TEXT NOT NULL,
+		type TEXT NOT NULL,
+		config TEXT,
+		next_run_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+	)`)
+
+	db.GetDB().Exec("ALTER TABLE workflow_executions ADD COLUMN IF NOT EXISTS current_node_id TEXT")
+	db.GetDB().Exec("ALTER TABLE workflow_executions ADD COLUMN IF NOT EXISTS step_results TEXT")
+	db.GetDB().Exec("ALTER TABLE workflow_executions ADD COLUMN IF NOT EXISTS has_failed BOOLEAN DEFAULT FALSE")
+	db.GetDB().Exec("ALTER TABLE workflow_executions ADD COLUMN IF NOT EXISTS result TEXT")
+	db.GetDB().Exec("ALTER TABLE workflow_executions ADD COLUMN IF NOT EXISTS context TEXT")
+
 	// Create tables if they didn't exist
 	// Tables are handled by schema.sql migration logic below
 
@@ -116,6 +132,43 @@ func main() {
 		if err != nil {
 			e.Logger.Fatal("Failed to seed organization:", err)
 		}
+	}
+
+	// Seed Site 1 if not exists
+	var siteCount int
+	db.GetDB().QueryRow("SELECT COUNT(*) FROM sites WHERE id = 1").Scan(&siteCount)
+	if siteCount == 0 {
+		_, err := db.GetDB().Exec("INSERT INTO sites (id, organization_id, name, url) VALUES (1, 1, 'Default Site', 'https://example.com')")
+		if err != nil {
+			log.Println("Failed to seed site:", err)
+		}
+	}
+
+	// Create Metric Tables (corresponding to backend events)
+	db.GetDB().Exec(`CREATE TABLE IF NOT EXISTS metric_signups (
+		id SERIAL PRIMARY KEY,
+		site_id INTEGER,
+		user_email TEXT,
+		created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+	)`)
+	db.GetDB().Exec(`CREATE TABLE IF NOT EXISTS metric_purchases (
+		id SERIAL PRIMARY KEY,
+		site_id INTEGER,
+		amount DECIMAL,
+		currency TEXT,
+		created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+	)`)
+	db.GetDB().Exec(`CREATE TABLE IF NOT EXISTS metric_page_views (
+		id SERIAL PRIMARY KEY,
+		site_id INTEGER,
+		path TEXT,
+		created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+	)`)
+
+	// Seed Event Definitions
+	events := []string{"signup", "purchase", "page_view"}
+	for _, eventName := range events {
+		_, _ = db.GetDB().Exec("INSERT INTO event_definitions (site_id, name, description) VALUES (1, $1, 'System metric event') ON CONFLICT DO NOTHING", eventName)
 	}
 
 	// Routes

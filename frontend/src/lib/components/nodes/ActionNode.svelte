@@ -13,7 +13,7 @@
     const updateNodeInternals = useUpdateNodeInternals();
 
     // Default to 'left' if not specified
-    const position = $derived(data.handlePosition || "left");
+    const position = $derived(data.handlePosition || "right");
     const isRight = $derived(position === "right");
 
     $effect(() => {
@@ -36,10 +36,12 @@
         class="w-3 h-3 bg-gray-400"
     />
 
-    <div class="font-bold text-sm text-blue-700 mb-1">ACTION</div>
+    <div class="font-bold text-sm text-blue-700 mb-1">
+        {data.label || "Action"}
+    </div>
 
-    <div class="text-xs text-gray-800 mb-4">
-        {data.label || "Action Node"}
+    <div class="text-xs text-gray-800 mb-2">
+        {data.action || "Select Action"}
     </div>
 
     <!-- Output Handles Container -->

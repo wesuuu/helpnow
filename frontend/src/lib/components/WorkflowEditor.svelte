@@ -40,18 +40,14 @@
 
     // Connection Validation
     const isValidConnection = (connection: Connection | Edge) => {
-        // Allow strictly one edge per source handle for ACTION nodes (and generally)
-        // Check if there is already an edge with the same source and sourceHandle
-        const existingEdge = edges.find(
-            (e) =>
-                e.source === connection.source &&
-                e.sourceHandle === connection.sourceHandle,
+        // Enforce strict single output from a node.
+        // User request: "You should only be able to only create an edge to one of those [handles], not all or some, just one"
+        // This means if ANY edge exists from this source node, we block new ones.
+        const existingEdgesFromSource = edges.filter(
+            (e) => e.source === connection.source,
         );
 
-        // If existing edge is found, prevent new connection (User must delete first)
-        // Or we could silently replace. But user request "single node can only have a single edge"
-        // implies a constraint.
-        if (existingEdge) return false;
+        if (existingEdgesFromSource.length > 0) return false;
 
         return true;
     };

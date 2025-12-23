@@ -83,7 +83,7 @@
             position: pos,
             data: {
                 label: "New Action",
-                handlePosition: "left", // Default
+                handlePosition: "right", // Default
             },
         };
 

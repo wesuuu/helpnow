@@ -28,10 +28,18 @@
         name: string;
     }
 
+    interface EmailTemplate {
+        id: number;
+        name: string;
+        subject: string;
+        body: string;
+    }
+
     let workflows = $state<Workflow[]>([]);
     let sites = $state<Site[]>([]);
     let eventDefinitions = $state<EventDefinition[]>([]);
     let audiences = $state<Audience[]>([]);
+    let emailTemplates = $state<EmailTemplate[]>([]);
     let loading = $state(true);
 
     // Create Modal State
@@ -42,6 +50,27 @@
     let triggerType = $state("EVENT"); // 'EVENT' or 'SCHEDULE'
     let schedule = $state("");
     let selectedAudienceId = $state("");
+
+    // Create Template State
+    let showCreateTemplateModal = $state(false);
+    let newTemplateName = $state("");
+    let newTemplateSubject = $state("");
+    let newTemplateBody = $state("");
+
+    // Template Preview State
+    let testFirstName = $state("John");
+    let testLastName = $state("Doe");
+
+    let previewSubject = $derived(
+        newTemplateSubject
+            .replace(/{{first_name}}/g, testFirstName)
+            .replace(/{{last_name}}/g, testLastName),
+    );
+    let previewBody = $derived(
+        newTemplateBody
+            .replace(/{{first_name}}/g, testFirstName)
+            .replace(/{{last_name}}/g, testLastName),
+    );
 
     // Graph State
     let graphNodes = $state<any[]>([]);
@@ -77,15 +106,67 @@
         }
     }
 
-    async function fetchEvents(siteId: string) {
-        if (!siteId) {
-            eventDefinitions = [];
+    async function loadEmailTemplates() {
+        try {
+            const res = await fetch("/api/email-templates?organization_id=1");
+            if (res.ok) {
+                emailTemplates = await res.json();
+            }
+        } catch (e) {
+            console.error("Failed to load email templates", e);
+        }
+    }
+
+    async function loadAudiences() {
+        try {
+            const res = await fetch("/api/audiences?organization_id=1");
+            if (res.ok) {
+                audiences = await res.json();
+            }
+        } catch (e) {
+            console.error("Failed to load audiences", e);
+        }
+    }
+
+    async function createEmailTemplate() {
+        if (!newTemplateName || !newTemplateSubject || !newTemplateBody) {
+            alert("Please fill all template fields");
             return;
         }
         try {
-            const res = await fetch(
-                `/api/events/definitions?site_id=${siteId}`,
-            );
+            const res = await fetch("/api/email-templates", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    organization_id: 1,
+                    name: newTemplateName,
+                    subject: newTemplateSubject,
+                    body: newTemplateBody,
+                }),
+            });
+            if (res.ok) {
+                const newTemplate = await res.json();
+                emailTemplates = [...emailTemplates, newTemplate];
+                showCreateTemplateModal = false;
+                // Auto-select if a node is selected
+                if (selectedNode && selectedNode.data) {
+                    selectedNode.data.template_id = newTemplate.id;
+                }
+                newTemplateName = "";
+                newTemplateSubject = "";
+                newTemplateBody = "";
+            } else {
+                alert("Failed to create template");
+            }
+        } catch (e) {
+            console.error("Error creating template", e);
+        }
+    }
+
+    // ... existing fetchEvents ...
+    async function loadAllEvents() {
+        try {
+            const res = await fetch("/api/events/definitions");
             if (res.ok) {
                 eventDefinitions = await res.json();
             }
@@ -94,19 +175,27 @@
         }
     }
 
+    // Computed unique event names for dropdown
+    let uniqueEventNames = $derived(
+        Array.from(new Set(eventDefinitions.map((e) => e.name))).sort(),
+    );
+
     function handleSiteChange() {
         selectedTrigger = ""; // Reset trigger
-        fetchEvents(selectedSiteId);
-        // Reset/Recreate Start Node based on Trigger?
-        // For simplicity, let's keep graph manual but maybe auto-add Start Node
+        // reset graph?
         initializeGraph();
     }
+
+    // ... existing functions ...
+
+    // ... addNode ...
+
+    // ... createWorkflow ...
 
     function initializeGraph() {
         graphNodes = [];
         graphEdges = [];
         addNode("TRIGGER", "Start Trigger");
-        // Fix position of first node
         if (graphNodes[0]) {
             graphNodes[0].position = { x: 50, y: 300 };
         }
@@ -114,9 +203,7 @@
 
     function addNode(type: string, label: string = "") {
         const id = `n-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
-
         let pos = { x: 100, y: 100 };
-        // Simple auto-placement
         if (graphNodes.length > 0) {
             const lastNode = graphNodes[graphNodes.length - 1];
             pos = { x: lastNode.position.x + 250, y: lastNode.position.y };
@@ -130,13 +217,17 @@
                 label: label || type,
                 action: "",
                 force: "", // For condition nodes
-                handlePosition: "left",
+                handlePosition: "right",
+                trigger_type: "EVENT",
+                site_ids: [],
+                audience_ids: [],
+                cron: "",
+                trigger_event: "",
             },
         };
 
         graphNodes = [...graphNodes, newNode];
 
-        // Auto-connect not strictly required for this step but good UX
         if (graphNodes.length > 1) {
             const sourceNode = graphNodes[graphNodes.length - 2];
             graphEdges = [
@@ -145,7 +236,6 @@
                     id: `e-${Date.now()}`,
                     source: sourceNode.id,
                     target: id,
-                    // Default handle logic could normally go here
                 },
             ];
         }
@@ -159,37 +249,24 @@
 
         const workflowData: any = {
             name: newWorkflowName,
-            trigger_type: triggerType,
-            steps: JSON.stringify({ nodes: graphNodes, edges: graphEdges }), // Graph JSON
+            trigger_type: "MULTIPLE",
+            steps: JSON.stringify({ nodes: graphNodes, edges: graphEdges }),
             status: "ACTIVE",
             organization_id: 1,
         };
 
-        if (triggerType === "EVENT") {
-            if (!selectedSiteId || !selectedTrigger) {
-                alert("Please select a site and trigger event");
-                return;
-            }
-            workflowData.site_id = parseInt(selectedSiteId);
-            workflowData.trigger_event = selectedTrigger;
-        } else if (triggerType === "SCHEDULE") {
-            if (!schedule) {
-                alert("Please enter a schedule (Cron expression)");
-                return;
-            }
-            workflowData.schedule = schedule;
-            if (selectedAudienceId) {
-                workflowData.audience_id = parseInt(selectedAudienceId);
-            }
+        // Trigger validation is now implicit in the graph configuration
+        // We could validate that at least one trigger exists in graphNodes
+        const triggerNode = graphNodes.find((n) => n.type === "TRIGGER");
+        if (!triggerNode) {
+            alert("Workflow must have a Trigger node");
+            return;
         }
 
         try {
             const res = await fetch("/api/workflows", {
-                // Relative path OK
                 method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                },
+                headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(workflowData),
             });
 
@@ -215,6 +292,9 @@
     onMount(() => {
         loadWorkflows();
         loadSites();
+        loadEmailTemplates();
+        loadAllEvents();
+        loadAudiences();
         initializeGraph();
     });
 </script>
@@ -345,183 +425,314 @@
                 >
                     <h4 class="font-medium text-gray-900 mb-4">Settings</h4>
 
-                    <!-- Trigger Config -->
-                    <div class="space-y-4 mb-6">
+                    <div class="space-y-4">
                         <div>
                             <label
-                                class="block text-xs font-medium text-gray-500 uppercase"
-                                >Trigger Type</label
+                                class="block text-sm font-medium text-gray-700"
+                                >Workflow Name</label
                             >
-                            <div class="mt-1 flex gap-2">
-                                <label class="inline-flex items-center text-sm">
-                                    <input
-                                        type="radio"
-                                        bind:group={triggerType}
-                                        value="EVENT"
-                                        class="form-radio text-indigo-600"
-                                    />
-                                    <span class="ml-1">Event</span>
-                                </label>
-                                <label class="inline-flex items-center text-sm">
-                                    <input
-                                        type="radio"
-                                        bind:group={triggerType}
-                                        value="SCHEDULE"
-                                        class="form-radio text-indigo-600"
-                                    />
-                                    <span class="ml-1">Schedule</span>
-                                </label>
-                            </div>
+                            <input
+                                type="text"
+                                bind:value={newWorkflowName}
+                                placeholder="My Workflow"
+                                class="mt-1 block w-full border-gray-300 rounded-md shadow-sm sm:text-sm"
+                            />
                         </div>
-
-                        {#if triggerType === "EVENT"}
-                            <div>
-                                <label
-                                    class="block text-sm font-medium text-gray-700"
-                                    >Site</label
-                                >
-                                <select
-                                    bind:value={selectedSiteId}
-                                    onchange={handleSiteChange}
-                                    class="mt-1 block w-full border-gray-300 rounded-md shadow-sm sm:text-sm"
-                                >
-                                    <option value="">Select...</option>
-                                    {#each sites as site}
-                                        <option value={site.id}
-                                            >{site.name}</option
-                                        >
-                                    {/each}
-                                </select>
-                            </div>
-                            <div>
-                                <label
-                                    class="block text-sm font-medium text-gray-700"
-                                    >Event</label
-                                >
-                                <select
-                                    bind:value={selectedTrigger}
-                                    class="mt-1 block w-full border-gray-300 rounded-md shadow-sm sm:text-sm"
-                                >
-                                    <option value="">Select...</option>
-                                    <option value="impression"
-                                        >impression</option
-                                    >
-                                    <option value="click">click</option>
-                                    <option value="conversion"
-                                        >conversion</option
-                                    >
-                                    {#each eventDefinitions as event}
-                                        <option value={event.name}
-                                            >{event.name}</option
-                                        >
-                                    {/each}
-                                </select>
-                            </div>
-                        {:else}
-                            <div>
-                                <label
-                                    class="block text-sm font-medium text-gray-700"
-                                    >Schedule (Cron)</label
-                                >
-                                <input
-                                    type="text"
-                                    bind:value={schedule}
-                                    placeholder="0 12 * * *"
-                                    class="mt-1 block w-full border-gray-300 rounded-md shadow-sm sm:text-sm"
-                                />
-                            </div>
-                        {/if}
+                        <div
+                            class="p-4 bg-blue-50 text-blue-800 text-xs rounded"
+                        >
+                            Configure triggers by clicking on the <strong
+                                >Start Trigger</strong
+                            > node in the graph.
+                        </div>
                     </div>
-
                     <hr class="my-4" />
 
                     <!-- Node Properties -->
-                    {#if selectedNode}
-                        <h4 class="font-medium text-gray-900 mb-2">
+                    <div>
+                        <h4 class="font-medium text-gray-900 mb-4">
                             Node Properties
                         </h4>
-                        <div class="text-xs text-gray-500 mb-2">
-                            ID: {selectedNode.id}
-                        </div>
-                        <div class="space-y-3">
-                            <div class="space-y-4">
+                        {#if selectedNode}
+                            <div class="mb-4">
                                 <label
-                                    class="block text-sm font-medium text-gray-700"
-                                    >Action Type</label
-                                >
-                                {#if selectedNode.data}
-                                    <select
-                                        bind:value={selectedNode.data.action}
-                                        class="mt-1 block w-full border-gray-300 rounded-md shadow-sm sm:text-sm"
-                                    >
-                                        <option value=""
-                                            >Select Action...</option
-                                        >
-                                        <option value="Send Email"
-                                            >Send Email</option
-                                        >
-                                        <option value="Log Event"
-                                            >Log Event</option
-                                        >
-                                        <option value="FAIL"
-                                            >Simulate Failure</option
-                                        >
-                                    </select>
-                                {/if}
-                            </div>
-
-                            <div class="mt-4">
-                                <label
-                                    class="block text-sm font-medium text-gray-700"
+                                    class="block text-xs font-medium text-gray-500 uppercase"
                                     >Label</label
                                 >
-                                {#if selectedNode.data}
+                                <input
+                                    type="text"
+                                    bind:value={selectedNode.data.label}
+                                    maxlength="50"
+                                    class="mt-1 block w-full border-gray-300 rounded-md shadow-sm sm:text-sm"
+                                />
+                                {#if selectedNode.data.label && selectedNode.data.label.length >= 50}
+                                    <p class="mt-1 text-xs text-red-600">
+                                        Maximum length of 50 characters reached.
+                                    </p>
+                                {/if}
+                            </div>
+
+                            {#if selectedNode.type === "TRIGGER"}
+                                <div class="space-y-4">
+                                    <div>
+                                        <label
+                                            class="block text-sm font-medium text-gray-700"
+                                            >Trigger Type</label
+                                        >
+                                        <select
+                                            bind:value={
+                                                selectedNode.data.trigger_type
+                                            }
+                                            class="block w-full border-gray-300 rounded-md shadow-sm sm:text-sm"
+                                        >
+                                            <option value="EVENT"
+                                                >Event Based</option
+                                            >
+                                            <option value="SCHEDULE"
+                                                >Scheduled</option
+                                            >
+                                        </select>
+                                    </div>
+
+                                    {#if selectedNode.data.trigger_type === "EVENT"}
+                                        <div>
+                                            <label
+                                                class="block text-sm font-medium text-gray-700"
+                                                >Event Name</label
+                                            >
+                                            <select
+                                                bind:value={
+                                                    selectedNode.data
+                                                        .trigger_event
+                                                }
+                                                class="block w-full border-gray-300 rounded-md shadow-sm sm:text-sm"
+                                            >
+                                                <option value=""
+                                                    >Select Event...</option
+                                                >
+                                                {#each uniqueEventNames as name}
+                                                    <option value={name}
+                                                        >{name}</option
+                                                    >
+                                                {/each}
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label
+                                                class="block text-sm font-medium text-gray-700 mb-2"
+                                                >Filter Sites</label
+                                            >
+                                            <div
+                                                class="space-y-2 max-h-40 overflow-y-auto border p-2 rounded bg-gray-50"
+                                            >
+                                                {#each sites as site}
+                                                    <label
+                                                        class="flex items-center text-sm"
+                                                    >
+                                                        <input
+                                                            type="checkbox"
+                                                            bind:group={
+                                                                selectedNode
+                                                                    .data
+                                                                    .site_ids
+                                                            }
+                                                            value={site.id}
+                                                            class="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 mr-2"
+                                                        />
+                                                        {site.name}
+                                                    </label>
+                                                {/each}
+                                            </div>
+                                            <p
+                                                class="text-xs text-gray-500 mt-1"
+                                            >
+                                                Select logic: OR (Run if event
+                                                happens on any selected site).
+                                            </p>
+                                        </div>
+                                    {:else}
+                                        <div>
+                                            <label
+                                                class="block text-sm font-medium text-gray-700"
+                                                >Cron Expression</label
+                                            >
+                                            <input
+                                                type="text"
+                                                bind:value={
+                                                    selectedNode.data.cron
+                                                }
+                                                placeholder="* * * * *"
+                                                class="block w-full border-gray-300 rounded-md shadow-sm sm:text-sm"
+                                            />
+                                            <p
+                                                class="text-xs text-gray-500 mt-1"
+                                            >
+                                                Example: `0 9 * * *` (Every day
+                                                at 9am)
+                                            </p>
+                                        </div>
+                                    {/if}
+                                </div>
+
+                                <!-- Audience Filter (Common to Event & Schedule) -->
+                                <div class="mt-4 border-t pt-4">
+                                    <label
+                                        class="block text-sm font-medium text-gray-700 mb-2"
+                                        >Filter / Apply to Audiences</label
+                                    >
+                                    <div
+                                        class="space-y-2 max-h-40 overflow-y-auto border p-2 rounded bg-gray-50"
+                                    >
+                                        {#each audiences as audience}
+                                            <label
+                                                class="flex items-center text-sm"
+                                            >
+                                                <input
+                                                    type="checkbox"
+                                                    bind:group={
+                                                        selectedNode.data
+                                                            .audience_ids
+                                                    }
+                                                    value={audience.id}
+                                                    class="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 mr-2"
+                                                />
+                                                {audience.name}
+                                            </label>
+                                        {/each}
+                                    </div>
+                                    <p class="text-xs text-gray-500 mt-1">
+                                        {#if selectedNode.data.trigger_type === "EVENT"}
+                                            Trigger only if user is in selected
+                                            audiences.
+                                        {:else}
+                                            Apply schedule context to selected
+                                            audiences.
+                                        {/if}
+                                    </p>
+                                </div>
+                            {:else if selectedNode.type === "ACTION"}
+                                <div>
+                                    <label
+                                        class="block text-xs font-medium text-gray-500 uppercase"
+                                        >Action</label
+                                    >
+                                    {#if selectedNode.data}
+                                        <select
+                                            bind:value={
+                                                selectedNode.data.action
+                                            }
+                                            class="mt-1 block w-full border-gray-300 rounded-md shadow-sm sm:text-sm"
+                                        >
+                                            <option value=""
+                                                >Select Action...</option
+                                            >
+                                            <option value="Send Email"
+                                                >Send Email</option
+                                            >
+                                            <option value="Log Event"
+                                                >Log Event</option
+                                            >
+                                            <option value="FAIL"
+                                                >Simulate Failure</option
+                                            >
+                                        </select>
+                                    {/if}
+                                </div>
+
+                                {#if selectedNode.data && selectedNode.data.action === "Send Email"}
+                                    <div
+                                        class="mt-4 p-3 bg-gray-50 rounded border border-gray-200"
+                                    >
+                                        <div
+                                            class="flex justify-between items-center mb-2"
+                                        >
+                                            <label
+                                                class="block text-xs font-medium text-gray-700 uppercase"
+                                                >Email Template</label
+                                            >
+                                            <button
+                                                onclick={() => {
+                                                    newTemplateName = "";
+                                                    newTemplateSubject = "";
+                                                    newTemplateBody = "";
+                                                    showCreateTemplateModal = true;
+                                                }}
+                                                class="text-indigo-600 hover:text-indigo-800 text-xs font-medium"
+                                            >
+                                                + New
+                                            </button>
+                                        </div>
+
+                                        <select
+                                            bind:value={
+                                                selectedNode.data.template_id
+                                            }
+                                            class="block w-full border-gray-300 rounded-md shadow-sm sm:text-sm"
+                                        >
+                                            <option value=""
+                                                >Select Template...</option
+                                            >
+                                            {#each emailTemplates as t}
+                                                <option value={t.id}
+                                                    >{t.name}</option
+                                                >
+                                            {/each}
+                                        </select>
+                                    </div>
+                                {/if}
+
+                                <div class="mt-4">
+                                    <label
+                                        class="block text-sm font-medium text-gray-700"
+                                        >Delay (Days)</label
+                                    >
                                     <input
-                                        type="text"
-                                        bind:value={selectedNode.data.label}
+                                        type="number"
+                                        bind:value={
+                                            selectedNode.data.delay_days
+                                        }
+                                        min="0"
                                         class="mt-1 block w-full border-gray-300 rounded-md shadow-sm sm:text-sm"
                                     />
-                                {/if}
-                            </div>
-
-                            <div class="mt-4">
-                                <label
-                                    class="block text-sm font-medium text-gray-700"
-                                    >Handle Position</label
-                                >
-                                {#if selectedNode.data}
-                                    <select
-                                        bind:value={
-                                            selectedNode.data.handlePosition
-                                        }
-                                        class="mt-1 block w-full border-gray-300 rounded-md shadow-sm sm:text-sm"
+                                </div>
+                                <div class="mt-2">
+                                    <label
+                                        class="block text-sm font-medium text-gray-700"
+                                        >Delay (Hours)</label
                                     >
-                                        <option value="right"
-                                            >Right (Outputs)</option
-                                        >
-                                        <option value="left"
-                                            >Left (Outputs)</option
-                                        >
-                                    </select>
-                                {/if}
+                                    <input
+                                        type="number"
+                                        bind:value={
+                                            selectedNode.data.delay_hours
+                                        }
+                                        min="0"
+                                        class="mt-1 block w-full border-gray-300 rounded-md shadow-sm sm:text-sm"
+                                    />
+                                </div>
+                            {/if}
+                        {:else}
+                            <div class="text-sm text-gray-500 italic">
+                                Select a node to edit properties.
                             </div>
-                        </div>
-                    {:else}
-                        <div class="text-sm text-gray-500 italic">
-                            Select a node to edit properties.
-                        </div>
-                    {/if}
+                        {/if}
 
-                    <div class="mt-8 space-y-2">
-                        <label
-                            class="block text-xs font-medium text-gray-500 uppercase"
-                            >Add Node</label
-                        >
-                        <button
-                            onclick={() => addNode("ACTION", "New Action")}
-                            class="w-full text-left px-3 py-2 bg-blue-50 text-blue-700 rounded hover:bg-blue-100 text-sm font-medium"
-                            >+ Action Node</button
-                        >
+                        <div class="mt-8 space-y-2">
+                            <label
+                                class="block text-xs font-medium text-gray-500 uppercase"
+                                >Add Node</label
+                            >
+                            <button
+                                onclick={() => addNode("ACTION", "New Action")}
+                                class="w-full text-left px-3 py-2 bg-blue-50 text-blue-700 rounded hover:bg-blue-100 text-sm font-medium"
+                                >+ Action Node</button
+                            >
+                            <button
+                                onclick={() =>
+                                    addNode("TRIGGER", "New Trigger")}
+                                class="w-full text-left px-3 py-2 bg-green-50 text-green-700 rounded hover:bg-green-100 text-sm font-medium"
+                                >+ Trigger Node</button
+                            >
+                        </div>
                     </div>
                 </div>
 
@@ -554,6 +765,139 @@
                     Cancel
                 </button>
             </div>
+        </div>
+    </Modal>
+{/if}
+
+{#if showCreateTemplateModal}
+    <Modal onclose={() => (showCreateTemplateModal = false)} size="xl">
+        <div class="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
+            <h3
+                class="text-lg leading-6 font-medium text-gray-900"
+                id="modal-title"
+            >
+                Create Email Template
+            </h3>
+
+            <div class="mt-4 grid grid-cols-1 md:grid-cols-2 gap-6">
+                <!-- Editor Column -->
+                <div class="space-y-4">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700"
+                            >Template Name</label
+                        >
+                        <input
+                            type="text"
+                            bind:value={newTemplateName}
+                            class="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                            placeholder="e.g., Welcome Email"
+                        />
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700"
+                            >Subject</label
+                        >
+                        <input
+                            type="text"
+                            bind:value={newTemplateSubject}
+                            class="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                            placeholder={"Subject line with {{first_name}}"}
+                        />
+                        <p class="mt-1 text-xs text-gray-500">
+                            Supports variables: <code>{`{{first_name}}`}</code>,
+                            <code>{`{{last_name}}`}</code>
+                        </p>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700"
+                            >Body</label
+                        >
+                        <textarea
+                            bind:value={newTemplateBody}
+                            rows="10"
+                            class="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm font-mono"
+                        ></textarea>
+                        <p class="mt-1 text-xs text-gray-500">
+                            Supports variables: <code>{`{{first_name}}`}</code>,
+                            <code>{`{{last_name}}`}</code>
+                        </p>
+                    </div>
+                </div>
+
+                <!-- Preview Column -->
+                <div class="bg-gray-50 p-4 rounded-lg flex flex-col h-full">
+                    <h4 class="text-sm font-medium text-gray-700 mb-2">
+                        Preview
+                    </h4>
+
+                    <div class="grid grid-cols-2 gap-2 mb-4">
+                        <div>
+                            <label
+                                class="block text-xs font-medium text-gray-500"
+                                >Test First Name</label
+                            >
+                            <input
+                                type="text"
+                                bind:value={testFirstName}
+                                class="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-xs"
+                            />
+                        </div>
+                        <div>
+                            <label
+                                class="block text-xs font-medium text-gray-500"
+                                >Test Last Name</label
+                            >
+                            <input
+                                type="text"
+                                bind:value={testLastName}
+                                class="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-xs"
+                            />
+                        </div>
+                    </div>
+
+                    <div
+                        class="bg-white border border-gray-200 rounded-md p-4 shadow-sm flex-1 overflow-y-auto hidden-scrollbar"
+                    >
+                        <div class="border-b border-gray-100 pb-2 mb-2">
+                            <span class="text-xs text-gray-500 block"
+                                >Subject:</span
+                            >
+                            <p
+                                class="text-sm font-medium text-gray-900 break-words"
+                            >
+                                {previewSubject || "(No Subject)"}
+                            </p>
+                        </div>
+                        <div>
+                            <span class="text-xs text-gray-500 block mb-1"
+                                >Body:</span
+                            >
+                            <div
+                                class="text-sm text-gray-800 whitespace-pre-wrap font-sans"
+                            >
+                                {@html previewBody ||
+                                    "<span class='text-gray-400 italic'>(Empty body)</span>"}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
+            <button
+                onclick={createEmailTemplate}
+                type="button"
+                class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-indigo-600 text-base font-medium text-white hover:bg-indigo-700 sm:ml-3 sm:w-auto sm:text-sm"
+            >
+                Save
+            </button>
+            <button
+                onclick={() => (showCreateTemplateModal = false)}
+                type="button"
+                class="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 sm:mt-0 sm:ml-3 sm:w-auto sm:text-sm"
+            >
+                Cancel
+            </button>
         </div>
     </Modal>
 {/if}

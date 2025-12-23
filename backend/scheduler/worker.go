@@ -3,11 +3,13 @@ package scheduler
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"log"
 	"math/rand"
 	"time"
 
 	"github.com/wesuuu/helpnow/backend/db"
+	"github.com/wesuuu/helpnow/backend/outbound"
 )
 
 // --- Graph Data Structures ---
@@ -44,6 +46,7 @@ type ScheduledExecution struct {
 	GraphJSON     string         // Replaces StepsJSON
 	ResultJSON    sql.NullString
 	HasFailed     bool
+	Context       sql.NullString
 }
 
 type StepResult struct {
@@ -65,7 +68,7 @@ func processPendingExecutions() {
 	// Query for executions that are PENDING and due
 	// Note: We're reading `steps` into `GraphJSON`.
 	rows, err := db.GetDB().Query(`
-		SELECT we.id, we.workflow_id, we.current_node_id, w.steps, we.step_results, we.has_failed 
+		SELECT we.id, we.workflow_id, we.current_node_id, w.steps, we.step_results, we.has_failed, we.context 
 		FROM workflow_executions we
 		JOIN workflows w ON we.workflow_id = w.id
 		WHERE we.status = 'PENDING' AND we.next_run_at <= NOW()
@@ -78,7 +81,7 @@ func processPendingExecutions() {
 
 	for rows.Next() {
 		var exec ScheduledExecution
-		if err := rows.Scan(&exec.ID, &exec.WorkflowID, &exec.CurrentNodeID, &exec.GraphJSON, &exec.ResultJSON, &exec.HasFailed); err != nil {
+		if err := rows.Scan(&exec.ID, &exec.WorkflowID, &exec.CurrentNodeID, &exec.GraphJSON, &exec.ResultJSON, &exec.HasFailed, &exec.Context); err != nil {
 			log.Println("Scheduler scan error:", err)
 			continue
 		}
@@ -151,6 +154,75 @@ func processSingleExecution(exec ScheduledExecution) {
 		actionType, _ := node.Properties["action"].(string)
 		output = "Executed " + actionType
 
+		if actionType == "Send Email" {
+			// Extract template ID
+			var templateID int
+			if tid, ok := node.Properties["template_id"]; ok {
+				switch v := tid.(type) {
+				case float64:
+					templateID = int(v)
+				case int:
+					templateID = v
+				case string:
+					// simple atoi if needed, or 0
+				}
+			}
+
+			if templateID > 0 {
+				// Fetch Template
+				var subject, body string
+				err := db.GetDB().QueryRow("SELECT subject, body FROM email_templates WHERE id = $1", templateID).Scan(&subject, &body)
+				if err != nil {
+					log.Printf("[Worker] Failed to fetch template %d: %v", templateID, err)
+					status = "failed"
+					output = "Failed to fetch template"
+					exec.HasFailed = true
+				} else {
+					// Extract Recipient from Context
+					recipient := ""
+					if exec.Context.Valid {
+						var ctxData map[string]interface{}
+						if err := json.Unmarshal([]byte(exec.Context.String), &ctxData); err == nil {
+							if email, ok := ctxData["email"].(string); ok {
+								recipient = email
+							} else if _, ok := ctxData["person_id"].(float64); ok {
+								// TODO: Fetch person email if ID provided?
+								// For now MVP expects email in context
+							}
+						}
+					}
+
+					// Fallback: If no recipient, check if we want to default to something (or fail)
+					if recipient == "" {
+						// MVP: Log warning, ideally fail
+						log.Printf("[Worker] No recipient email found in context for execution %d", exec.ID)
+						// For testing convenience, we might skip fail if it's a test run
+						status = "failed"
+						output = "No recipient email in context"
+						exec.HasFailed = true
+					} else {
+						// Send Email
+						err := outbound.SendEmail(nil, outbound.Email{
+							To:      recipient,
+							From:    "notifications@helpnow.ai", // Default sender
+							Subject: subject,
+							Body:    body,
+						})
+						if err != nil {
+							log.Printf("[Worker] Failed to send email: %v", err)
+							status = "failed"
+							output = "Failed to send email: " + err.Error()
+							exec.HasFailed = true
+						} else {
+							output = fmt.Sprintf("Email sent to %s (Template %d)", recipient, templateID)
+						}
+					}
+				}
+			} else {
+				output = "No template selected"
+			}
+		}
+
 		// Mock Fail
 		if actionType == "FAIL" {
 			status = "failed"
@@ -218,9 +290,52 @@ func processSingleExecution(exec ScheduledExecution) {
 	}
 
 	if nextNodeID != "" {
+		// Find next node object to check for delays
+		var nextNode *Node
+		for i, n := range graph.Nodes {
+			if n.ID == nextNodeID {
+				nextNode = &graph.Nodes[i]
+				break
+			}
+		}
+
+		delayDuration := time.Duration(0)
+		if nextNode != nil {
+			// Extract delay properties
+			// properties map[string]interface{}, so values might be float64 (JSON default) or string
+			// We need to safely convert.
+			
+			getFloat := func(key string) float64 {
+				if val, ok := nextNode.Properties[key]; ok {
+					switch v := val.(type) {
+					case float64:
+						return v
+					case int:
+						return float64(v)
+					case string:
+						// Try parsing if string? For now assume valid JSON number types
+						return 0
+					}
+				}
+				return 0
+			}
+
+			days := getFloat("delay_days")
+			hours := getFloat("delay_hours")
+			
+			if days > 0 {
+				delayDuration += time.Duration(days) * 24 * time.Hour
+			}
+			if hours > 0 {
+				delayDuration += time.Duration(hours) * time.Hour
+			}
+		}
+
 		// Schedule next node
-		// Check for delay in properties? For now, immediate + small buffer
-		updateExecutionNode(exec.ID, nextNodeID, time.Now())
+		nextRunAt := time.Now().Add(delayDuration)
+		log.Printf("[Worker] Scheduling next node %s to run at %s (Delay: %s)\n", nextNodeID, nextRunAt.Format(time.RFC3339), delayDuration)
+		
+		updateExecutionNode(exec.ID, nextNodeID, nextRunAt)
 	} else {
 		// End of flow
 		markExecutionFinal(exec.ID, "COMPLETED", "")

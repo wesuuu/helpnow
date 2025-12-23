@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"math/rand"
@@ -77,23 +78,26 @@ func runDueCampaigns() {
 
 func runScheduledWorkflows() {
 	dbConn := db.GetDB()
-	// Query due scheduled workflows
+	// Query due scheduled triggers
 	rows, err := dbConn.Query(`
-		SELECT id, name, steps, schedule, audience_id 
-		FROM workflows 
-		WHERE trigger_type = 'SCHEDULE' AND status='ACTIVE' AND next_run_at <= NOW()
+		SELECT wt.id, wt.workflow_id, wt.node_id, w.audience_id, wt.config 
+		FROM workflow_triggers wt
+		JOIN workflows w ON wt.workflow_id = w.id 
+		WHERE wt.type = 'SCHEDULE' AND w.status='ACTIVE' AND wt.next_run_at <= NOW()
 	`)
 	if err != nil {
-		fmt.Println("Scheduler error checking workflows:", err)
+		fmt.Println("Scheduler error checking triggers:", err)
 		return
 	}
 	defer rows.Close()
 
 	for rows.Next() {
-		var id, audienceID int
+		var triggerID, workflowID, audienceID int
+		var nodeID string
 		var audIDPtr *int
-		var name, steps, schedule string
-		if err := rows.Scan(&id, &name, &steps, &schedule, &audIDPtr); err != nil {
+		var configStr sql.NullString
+		
+		if err := rows.Scan(&triggerID, &workflowID, &nodeID, &audIDPtr, &configStr); err != nil {
 			fmt.Println("Scan error:", err)
 			continue
 		}
@@ -101,42 +105,46 @@ func runScheduledWorkflows() {
 			audienceID = *audIDPtr
 		}
 
-		fmt.Printf("Triggering Scheduled Workflow: %s (ID: %d)\n", name, id)
+		fmt.Printf("Triggering Scheduled Workflow ID: %d (Trigger: %d, Node: %s)\n", workflowID, triggerID, nodeID)
 
 		// Create Execution
 		contextData := map[string]interface{}{}
+		
+		// 1. Legacy Audience ID
 		if audienceID != 0 {
 			contextData["audience_id"] = audienceID
 		}
+		
+		// 2. Trigger Config Audience IDs
+		if configStr.Valid && configStr.String != "" {
+			var config struct {
+				AudienceIDs []int `json:"audience_ids"`
+			}
+			if err := json.Unmarshal([]byte(configStr.String), &config); err == nil {
+				if len(config.AudienceIDs) > 0 {
+					contextData["audience_ids"] = config.AudienceIDs
+				}
+			}
+		}
 		contextJSON, _ := json.Marshal(contextData)
 
+		// Note: We set current_node_id to the trigger node ID directly
 		_, err = dbConn.Exec(`
-			INSERT INTO workflow_executions (workflow_id, status, next_run_at, created_at, context) 
-			VALUES ($1, 'PENDING', NOW(), NOW(), $2)`, id, string(contextJSON))
+			INSERT INTO workflow_executions (workflow_id, current_node_id, status, next_run_at, created_at, context) 
+			VALUES ($1, $2, 'PENDING', NOW(), NOW(), $3)`, 
+			workflowID, nodeID, string(contextJSON))
 
 		if err != nil {
 			fmt.Println("Failed to create execution:", err)
-			continue // Don't reschedule if we failed to start? Or should we?
-			// If we don't reschedule, it will loop forever.
+			continue
 		}
 
-		// Calculate Next Run
-		// Parse Cron-ish
-		// Simplest MVP parsing:
-		var nextRun time.Time
-		// Assume simplified cron: "Minute Hour * * *"
-		// Or simplified daily/hourly check
-		// Let's implement basic "Daily at Hour:Minute" or "Every N hours" if easy
-		// Fallback: Add 24 hours if parsing fails or default
-		nextRun = time.Now().Add(24 * time.Hour) // Default
+		// Calculate Next Run (MVP: +24h)
+		nextRun := time.Now().Add(24 * time.Hour)
 
-		// Attempt simple parsing
-		// If Schedule contains "every 12 hours" logic or standard cron
-		// ... (Keep it simple for now as per plan)
-
-		_, err = dbConn.Exec("UPDATE workflows SET next_run_at = $1 WHERE id = $2", nextRun, id)
+		_, err = dbConn.Exec("UPDATE workflow_triggers SET next_run_at = $1 WHERE id = $2", nextRun, triggerID)
 		if err != nil {
-			fmt.Println("Failed to update workflow next run:", err)
+			fmt.Println("Failed to update trigger next run:", err)
 		}
 	}
 }
