@@ -3,26 +3,30 @@ package scheduler
 import (
 	"database/sql"
 	"encoding/json"
-	"fmt"
 	"math/rand"
 	"time"
 
+	"github.com/labstack/gommon/log"
 	"github.com/wesuuu/helpnow/backend/db"
 )
+
+var Logger *log.Logger
+
+func init() {
+	Logger = log.New("scheduler")
+	Logger.SetHeader("${time_rfc3339} | ${level} | ${prefix} |")
+}
 
 func Start() {
 	ticker := time.NewTicker(1 * time.Minute)
 	// ... existing code ...
 	go func() {
-		for {
-			select {
-			case <-ticker.C:
-				runDueCampaigns()
-				runScheduledWorkflows()
-			}
+		for range ticker.C {
+			runDueCampaigns()
+			runScheduledWorkflows()
 		}
 	}()
-	fmt.Println("Scheduler started")
+	Logger.Info("Scheduler started")
 	StartWorker() // Start workflow worker
 }
 
@@ -32,7 +36,7 @@ func runDueCampaigns() {
 	// Find Active campaigns where next_run_at <= now
 	rows, err := dbConn.Query("SELECT id, name, schedule_interval FROM email_campaigns WHERE status = 'ACTIVE' AND next_run_at <= NOW()")
 	if err != nil {
-		fmt.Println("Scheduler error:", err)
+		Logger.Error("Scheduler error:", err)
 		return
 	}
 	defer rows.Close()
@@ -44,7 +48,7 @@ func runDueCampaigns() {
 			continue
 		}
 
-		fmt.Printf("Executing Campaign: %s (ID: %d)\n", name, id)
+		Logger.Infof("Executing Campaign: %s (ID: %d)", name, id)
 
 		// Simulate Execution
 		// Mock stats
@@ -54,7 +58,7 @@ func runDueCampaigns() {
 		// Record Run
 		_, err = dbConn.Exec("INSERT INTO campaign_runs (campaign_id, sent_count, success_rate, executed_at) VALUES ($1, $2, $3, NOW())", id, sent, success)
 		if err != nil {
-			fmt.Println("Failed to record run:", err)
+			Logger.Warn("Failed to record run:", err)
 		}
 
 		// Update Next Run
@@ -71,7 +75,7 @@ func runDueCampaigns() {
 
 		_, err = dbConn.Exec("UPDATE email_campaigns SET next_run_at = $1 WHERE id = $2", nextRun, id)
 		if err != nil {
-			fmt.Println("Failed to update next run:", err)
+			Logger.Warn("Failed to update next run:", err)
 		}
 	}
 }
@@ -86,7 +90,7 @@ func runScheduledWorkflows() {
 		WHERE wt.type = 'SCHEDULE' AND w.status='ACTIVE' AND wt.next_run_at <= NOW()
 	`)
 	if err != nil {
-		fmt.Println("Scheduler error checking triggers:", err)
+		Logger.Error("Scheduler error checking triggers:", err)
 		return
 	}
 	defer rows.Close()
@@ -96,25 +100,25 @@ func runScheduledWorkflows() {
 		var nodeID string
 		var audIDPtr *int
 		var configStr sql.NullString
-		
+
 		if err := rows.Scan(&triggerID, &workflowID, &nodeID, &audIDPtr, &configStr); err != nil {
-			fmt.Println("Scan error:", err)
+			Logger.Error("Scan error:", err)
 			continue
 		}
 		if audIDPtr != nil {
 			audienceID = *audIDPtr
 		}
 
-		fmt.Printf("Triggering Scheduled Workflow ID: %d (Trigger: %d, Node: %s)\n", workflowID, triggerID, nodeID)
+		Logger.Infof("Triggering Scheduled Workflow ID: %d (Trigger: %d, Node: %s)", workflowID, triggerID, nodeID)
 
 		// Create Execution
 		contextData := map[string]interface{}{}
-		
+
 		// 1. Legacy Audience ID
 		if audienceID != 0 {
 			contextData["audience_id"] = audienceID
 		}
-		
+
 		// 2. Trigger Config Audience IDs
 		if configStr.Valid && configStr.String != "" {
 			var config struct {
@@ -131,11 +135,11 @@ func runScheduledWorkflows() {
 		// Note: We set current_node_id to the trigger node ID directly
 		_, err = dbConn.Exec(`
 			INSERT INTO workflow_executions (workflow_id, current_node_id, status, next_run_at, created_at, context) 
-			VALUES ($1, $2, 'PENDING', NOW(), NOW(), $3)`, 
+			VALUES ($1, $2, 'PENDING', NOW(), NOW(), $3)`,
 			workflowID, nodeID, string(contextJSON))
 
 		if err != nil {
-			fmt.Println("Failed to create execution:", err)
+			Logger.Error("Failed to create execution:", err)
 			continue
 		}
 
@@ -144,7 +148,7 @@ func runScheduledWorkflows() {
 
 		_, err = dbConn.Exec("UPDATE workflow_triggers SET next_run_at = $1 WHERE id = $2", nextRun, triggerID)
 		if err != nil {
-			fmt.Println("Failed to update trigger next run:", err)
+			Logger.Error("Failed to update trigger next run:", err)
 		}
 	}
 }

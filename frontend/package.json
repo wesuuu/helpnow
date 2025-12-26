@@ -21,8 +21,14 @@
     "vite": "^7.2.4"
   },
   "dependencies": {
+    "@grapesjs/studio-sdk": "^1.0.56",
     "@tailwindcss/postcss": "^4.1.18",
     "@xyflow/svelte": "^1.5.0",
-    "@xyflow/system": "^0.0.74"
+    "@xyflow/system": "^0.0.74",
+    "grapesjs": "^0.22.14",
+    "grapesjs-blocks-basic": "^1.0.2",
+    "grapesjs-plugin-forms": "^2.0.6",
+    "grapesjs-preset-newsletter": "^1.0.2",
+    "grapesjs-preset-webpage": "^1.0.3"
   }
 }

@@ -9,6 +9,7 @@ import (
 	"github.com/labstack/echo/v4"
 	"github.com/lib/pq"
 	"github.com/wesuuu/helpnow/backend/db"
+	"github.com/wesuuu/helpnow/backend/models"
 )
 
 type EventDefinition struct {
@@ -56,7 +57,7 @@ func CreateWorkflow(c echo.Context) error {
 	}
 
 	// Calculate Initial Next Run if Schedule
-	if wf.TriggerType == "SCHEDULE" && wf.Schedule != nil && *wf.Schedule != "" {
+	if wf.TriggerType == string(models.TriggerTypeSchedule) && wf.Schedule != nil && *wf.Schedule != "" {
 		// MVP: If simple cron "* * * * *", current logic in updates handles parsing.
 		// Here we just set it to NOW() to run immediately or soon, or parse properly.
 		// For MVP simplicity, let's set it to NOW() so scheduler picks it up and calculates real next run.
@@ -95,13 +96,13 @@ func CreateWorkflow(c echo.Context) error {
 	var graph GraphStruct
 	if err := json.Unmarshal([]byte(wf.Steps), &graph); err == nil {
 		for _, node := range graph.Nodes {
-			if node.Type == "TRIGGER" {
+			if node.Type == string(models.NodeTypeTrigger) {
 				// Determine Type
-				tType := "EVENT" // Default
+				tType := string(models.TriggerTypeEvent) // Default
 				if val, ok := node.Properties["trigger_type"].(string); ok {
 					tType = val
 				} else if node.Properties["cron"] != nil {
-					tType = "SCHEDULE"
+					tType = string(models.TriggerTypeSchedule)
 				}
 
 				// Build Config JSON
@@ -110,7 +111,7 @@ func CreateWorkflow(c echo.Context) error {
 
 				// Determine Next Run (if schedule)
 				var nextRun sql.NullTime
-				if tType == "SCHEDULE" {
+				if tType == string(models.TriggerTypeSchedule) {
 					nextRun.Time = time.Now() // Run immediately/soon
 					nextRun.Valid = true
 				}
@@ -119,7 +120,7 @@ func CreateWorkflow(c echo.Context) error {
 					INSERT INTO workflow_triggers (workflow_id, node_id, type, config, next_run_at)
 					VALUES ($1, $2, $3, $4, $5)
 				`, wf.ID, node.ID, tType, configJSON, nextRun)
-				
+
 				if err != nil {
 					c.Logger().Error("Failed to save trigger:", err)
 				}
@@ -170,6 +171,108 @@ func ListWorkflows(c echo.Context) error {
 		}
 	}
 	return c.JSON(http.StatusOK, workflows)
+}
+
+func GetWorkflow(c echo.Context) error {
+	id := c.Param("id")
+	var w Workflow
+	var siteName sql.NullString
+
+	err := db.GetDB().QueryRow(`
+		SELECT w.id, w.organization_id, w.site_id, s.name, w.audience_id, w.name, w.trigger_type, w.trigger_event, w.steps, w.schedule, w.next_run_at, w.status, w.created_at 
+		FROM workflows w
+		LEFT JOIN sites s ON w.site_id = s.id
+		WHERE w.id = $1`, id).Scan(&w.ID, &w.OrganizationID, &w.SiteID, &siteName, &w.AudienceID, &w.Name, &w.TriggerType, &w.TriggerEvent, &w.Steps, &w.Schedule, &w.NextRunAt, &w.Status, &w.CreatedAt)
+
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return c.JSON(http.StatusNotFound, map[string]string{"error": "Workflow not found"})
+		}
+		c.Logger().Error("Failed to get workflow: ", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to get workflow"})
+	}
+
+	if siteName.Valid {
+		w.SiteName = siteName.String
+	}
+
+	return c.JSON(http.StatusOK, w)
+}
+
+func UpdateWorkflow(c echo.Context) error {
+	id := c.Param("id")
+	var wf Workflow
+	if err := c.Bind(&wf); err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid input"})
+	}
+
+	// Calculate Initial Next Run if Schedule
+	if wf.TriggerType == string(models.TriggerTypeSchedule) && wf.Schedule != nil && *wf.Schedule != "" {
+		now := time.Now()
+		wf.NextRunAt = &now
+	}
+
+	// Update Workflow Record
+	query := `UPDATE workflows SET site_id=$1, audience_id=$2, name=$3, trigger_type=$4, trigger_event=$5, steps=$6, schedule=$7, next_run_at=$8 WHERE id=$9`
+	_, err := db.GetDB().Exec(query, wf.SiteID, wf.AudienceID, wf.Name, wf.TriggerType, wf.TriggerEvent, wf.Steps, wf.Schedule, wf.NextRunAt, id)
+	if err != nil {
+		c.Logger().Error("Failed to update workflow: ", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to update workflow"})
+	}
+
+	// Re-create Triggers
+	// 1. Delete existing triggers for this workflow
+	_, err = db.GetDB().Exec("DELETE FROM workflow_triggers WHERE workflow_id = $1", id)
+	if err != nil {
+		c.Logger().Error("Failed to clear triggers: ", err)
+	}
+
+	// 2. Parse Graph and create new triggers
+	type GraphNode struct {
+		ID         string                 `json:"id"`
+		Type       string                 `json:"type"`
+		Properties map[string]interface{} `json:"properties"`
+	}
+	type GraphStruct struct {
+		Nodes []GraphNode `json:"nodes"`
+	}
+
+	var graph GraphStruct
+	if err := json.Unmarshal([]byte(wf.Steps), &graph); err == nil {
+		for _, node := range graph.Nodes {
+			if node.Type == string(models.NodeTypeTrigger) {
+				// Determine Type
+				tType := string(models.TriggerTypeEvent) // Default
+				if val, ok := node.Properties["trigger_type"].(string); ok {
+					tType = val
+				} else if node.Properties["cron"] != nil {
+					tType = string(models.TriggerTypeSchedule)
+				}
+
+				// Build Config JSON
+				configBytes, _ := json.Marshal(node.Properties)
+				configJSON := string(configBytes)
+
+				// Determine Next Run (if schedule)
+				var nextRun sql.NullTime
+				if tType == string(models.TriggerTypeSchedule) {
+					nextRun.Time = time.Now()
+					nextRun.Valid = true
+				}
+
+				_, err := db.GetDB().Exec(`
+					INSERT INTO workflow_triggers (workflow_id, node_id, type, config, next_run_at)
+					VALUES ($1, $2, $3, $4, $5)
+				`, id, node.ID, tType, configJSON, nextRun)
+
+				if err != nil {
+					c.Logger().Error("Failed to save trigger:", err)
+				}
+			}
+		}
+	}
+
+	return c.JSON(http.StatusOK, wf)
 }
 
 // Event Definitions
@@ -225,7 +328,7 @@ func TriggerWorkflow(siteID int, eventName string, contextData map[string]interf
 		SELECT wt.workflow_id, wt.node_id, wt.config 
 		FROM workflow_triggers wt 
 		JOIN workflows w ON wt.workflow_id = w.id 
-		WHERE wt.type = 'EVENT' AND w.status = 'ACTIVE'
+		WHERE wt.type = '` + string(models.TriggerTypeEvent) + `' AND w.status = 'ACTIVE'
 	`)
 	if err != nil {
 		return err
@@ -256,8 +359,8 @@ func TriggerWorkflow(siteID int, eventName string, contextData map[string]interf
 			}
 
 			// 2. Check Site ID (if SiteIDs is not empty)
-			// If SiteIDs is empty, maybe run for all? Or run for none? 
-			// Frontend: "Select logic: OR (Run if event happens on any selected site)". 
+			// If SiteIDs is empty, maybe run for all? Or run for none?
+			// Frontend: "Select logic: OR (Run if event happens on any selected site)".
 			// If empty, probably shouldn't run unless it means "All"?
 			// Let's assume empty means "None selected" so don't run.
 			// Unless we add an "All Sites" flag. For now, strict check.

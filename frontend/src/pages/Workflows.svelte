@@ -2,6 +2,7 @@
     import { onMount } from "svelte";
     import WorkflowEditor from "../lib/components/WorkflowEditor.svelte";
     import Modal from "../lib/components/Modal.svelte";
+    import { toast } from "../lib/stores/toast";
 
     interface Workflow {
         id: number;
@@ -11,6 +12,7 @@
         trigger_event?: string;
         status: string;
         created_at: string;
+        steps: string;
     }
 
     interface Site {
@@ -130,7 +132,7 @@
 
     async function createEmailTemplate() {
         if (!newTemplateName || !newTemplateSubject || !newTemplateBody) {
-            alert("Please fill all template fields");
+            toast.error("Please fill all template fields");
             return;
         }
         try {
@@ -156,10 +158,11 @@
                 newTemplateSubject = "";
                 newTemplateBody = "";
             } else {
-                alert("Failed to create template");
+                toast.error("Failed to create template");
             }
         } catch (e) {
             console.error("Error creating template", e);
+            toast.error("Error creating template");
         }
     }
 
@@ -241,9 +244,43 @@
         }
     }
 
+    let editingWorkflowId = $state(0);
+
+    function editWorkflow(wf: Workflow) {
+        editingWorkflowId = wf.id;
+        newWorkflowName = wf.name;
+
+        // Parse steps
+        try {
+            if (wf.steps) {
+                const steps = JSON.parse(wf.steps);
+                graphNodes = steps.nodes || [];
+                graphEdges = steps.edges || [];
+            } else {
+                initializeGraph();
+            }
+        } catch (e) {
+            console.error("Failed to parse workflow steps", e);
+            initializeGraph();
+        }
+
+        showCreateModal = true;
+    }
+
+    function resetEditor() {
+        newWorkflowName = "";
+        selectedSiteId = "";
+        selectedTrigger = "";
+        schedule = "";
+        selectedAudienceId = "";
+        triggerType = "EVENT";
+        editingWorkflowId = 0;
+        initializeGraph();
+    }
+
     async function createWorkflow() {
         if (!newWorkflowName) {
-            alert("Please enter a workflow name");
+            toast.error("Please enter a workflow name");
             return;
         }
 
@@ -259,33 +296,36 @@
         // We could validate that at least one trigger exists in graphNodes
         const triggerNode = graphNodes.find((n) => n.type === "TRIGGER");
         if (!triggerNode) {
-            alert("Workflow must have a Trigger node");
+            toast.error("Workflow must have a Trigger node");
             return;
         }
 
         try {
-            const res = await fetch("/api/workflows", {
-                method: "POST",
+            let url = "/api/workflows";
+            let method = "POST";
+
+            if (editingWorkflowId) {
+                url = `/api/workflows/${editingWorkflowId}`;
+                method = "PUT";
+            }
+
+            const res = await fetch(url, {
+                method: method,
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(workflowData),
             });
 
             if (res.ok) {
                 showCreateModal = false;
-                newWorkflowName = "";
-                selectedSiteId = "";
-                selectedTrigger = "";
-                schedule = "";
-                selectedAudienceId = "";
-                triggerType = "EVENT";
-                initializeGraph();
+                resetEditor();
                 loadWorkflows();
+                toast.success("Workflow saved successfully");
             } else {
-                alert("Failed to create workflow");
+                toast.error("Failed to save workflow");
             }
         } catch (error) {
-            console.error("Error creating workflow", error);
-            alert("Error creating workflow");
+            console.error("Error saving workflow", error);
+            toast.error("Error saving workflow");
         }
     }
 
@@ -310,7 +350,7 @@
         <button
             onclick={() => {
                 showCreateModal = true;
-                initializeGraph();
+                resetEditor();
             }}
             class="inline-flex items-center px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
         >
@@ -343,13 +383,16 @@
                             >Status</th
                         >
                         <th class="relative px-6 py-3"
-                            ><span class="sr-only">Edit</span></th
+                            ><span class="sr-only">Actions</span></th
                         >
                     </tr>
                 </thead>
                 <tbody class="bg-white divide-y divide-gray-200">
                     {#each workflows as wf}
-                        <tr class="hover:bg-gray-50">
+                        <tr
+                            class="hover:bg-gray-50 cursor-pointer"
+                            onclick={() => editWorkflow(wf)}
+                        >
                             <td
                                 class="px-6 py-4 whitespace-nowrap text-sm font-medium text-indigo-600"
                                 >{wf.name}</td
@@ -375,9 +418,10 @@
                                     href={`/sites/${wf.site_id}`}
                                     onclick={(e) => {
                                         e.preventDefault();
-                                        // router.navigate(`/sites/${wf.site_id}`); // Removed router import
+                                        e.stopPropagation();
+                                        // router.navigate(`/sites/${wf.site_id}`);
                                     }}
-                                    class="text-indigo-600 hover:text-indigo-900"
+                                    class="text-gray-600 hover:text-gray-900"
                                     >View Site</a
                                 >
                             </td>
@@ -407,7 +451,7 @@
                 class="bg-gray-50 px-4 py-3 border-b flex justify-between items-center"
             >
                 <h3 class="text-lg leading-6 font-medium text-gray-900">
-                    Create Graph Workflow
+                    {editingWorkflowId ? "Edit" : "Create"} Graph Workflow
                 </h3>
                 <input
                     type="text"
@@ -709,6 +753,20 @@
                                         class="mt-1 block w-full border-gray-300 rounded-md shadow-sm sm:text-sm"
                                     />
                                 </div>
+                                <div class="mt-2">
+                                    <label
+                                        class="block text-sm font-medium text-gray-700"
+                                        >Delay (Minutes)</label
+                                    >
+                                    <input
+                                        type="number"
+                                        bind:value={
+                                            selectedNode.data.delay_minutes
+                                        }
+                                        min="0"
+                                        class="mt-1 block w-full border-gray-300 rounded-md shadow-sm sm:text-sm"
+                                    />
+                                </div>
                             {/if}
                         {:else}
                             <div class="text-sm text-gray-500 italic">
@@ -755,7 +813,7 @@
                     onclick={createWorkflow}
                     class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-indigo-600 text-base font-medium text-white hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 sm:ml-3 sm:w-auto sm:text-sm"
                 >
-                    Create Workflow
+                    {editingWorkflowId ? "Save Changes" : "Create Workflow"}
                 </button>
                 <button
                     type="button"

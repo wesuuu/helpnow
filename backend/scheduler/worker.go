@@ -1,15 +1,16 @@
 package scheduler
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
-	"fmt"
-	"log"
 	"math/rand"
+	"strconv"
 	"time"
 
+	"github.com/wesuuu/helpnow/backend/actions"
 	"github.com/wesuuu/helpnow/backend/db"
-	"github.com/wesuuu/helpnow/backend/outbound"
+	"github.com/wesuuu/helpnow/backend/models"
 )
 
 // --- Graph Data Structures ---
@@ -74,7 +75,7 @@ func processPendingExecutions() {
 		WHERE we.status = 'PENDING' AND we.next_run_at <= NOW()
 	`)
 	if err != nil {
-		log.Println("Scheduler error querying executions:", err)
+		Logger.Error("Scheduler error querying executions:", err)
 		return
 	}
 	defer rows.Close()
@@ -82,7 +83,7 @@ func processPendingExecutions() {
 	for rows.Next() {
 		var exec ScheduledExecution
 		if err := rows.Scan(&exec.ID, &exec.WorkflowID, &exec.CurrentNodeID, &exec.GraphJSON, &exec.ResultJSON, &exec.HasFailed, &exec.Context); err != nil {
-			log.Println("Scheduler scan error:", err)
+			Logger.Error("Scheduler scan error:", err)
 			continue
 		}
 		processSingleExecution(exec)
@@ -92,7 +93,7 @@ func processPendingExecutions() {
 func processSingleExecution(exec ScheduledExecution) {
 	var graph Graph
 	if err := json.Unmarshal([]byte(exec.GraphJSON), &graph); err != nil {
-		log.Printf("[Worker] Failed to unmarshal graph for execution %d: %v\n", exec.ID, err)
+		Logger.Errorf("[Worker] Failed to unmarshal graph for execution %d: %v", exec.ID, err)
 		// Fallback for legacy array-based steps?
 		// For now, fail if not graph. In a real migration we'd check `[` vs `{`.
 		markExecutionFinal(exec.ID, "FAILED", "Invalid graph JSON")
@@ -106,7 +107,7 @@ func processSingleExecution(exec ScheduledExecution) {
 		// New execution: Find Start Node (Trigger)
 		// Assumption: The Trigger node has no incoming edges, or is explicitly Type="TRIGGER"
 		for _, n := range graph.Nodes {
-			if n.Type == "TRIGGER" {
+			if n.Type == string(models.NodeTypeTrigger) {
 				currentNodeID = n.ID
 				break
 			}
@@ -118,7 +119,7 @@ func processSingleExecution(exec ScheduledExecution) {
 	}
 
 	if currentNodeID == "" {
-		log.Printf("[Worker] No start node found for execution %d\n", exec.ID)
+		Logger.Errorf("[Worker] No start node found for execution %d", exec.ID)
 		markExecutionFinal(exec.ID, "FAILED", "No start node found")
 		return
 	}
@@ -133,103 +134,55 @@ func processSingleExecution(exec ScheduledExecution) {
 	}
 
 	if node == nil {
-		log.Printf("[Worker] Node %s not found in graph\n", currentNodeID)
+		Logger.Errorf("[Worker] Node %s not found in graph", currentNodeID)
 		markExecutionFinal(exec.ID, "FAILED", "Node not found")
 		return
 	}
 
-	log.Printf("[Worker] Executing Node: %s (%s)\n", node.Label, node.Type)
+	Logger.Infof("[Worker] Executing Node: %s (%s)", node.Label, node.Type)
 
 	// --- EXECUTE NODE LOGIC ---
 	output := ""
 	status := "success"
 	handleToFollow := "default" // Used for branching
 
-	switch node.Type {
-	case "TRIGGER":
+	switch models.NodeType(node.Type) {
+	case models.NodeTypeTrigger:
 		output = "Triggered"
 		handleToFollow = "default"
 
-	case "ACTION":
+	case models.NodeTypeAction:
 		actionType, _ := node.Properties["action"].(string)
 		output = "Executed " + actionType
 
-		if actionType == "Send Email" {
-			// Extract template ID
-			var templateID int
-			if tid, ok := node.Properties["template_id"]; ok {
-				switch v := tid.(type) {
-				case float64:
-					templateID = int(v)
-				case int:
-					templateID = v
-				case string:
-					// simple atoi if needed, or 0
-				}
-			}
-
-			if templateID > 0 {
-				// Fetch Template
-				var subject, body string
-				err := db.GetDB().QueryRow("SELECT subject, body FROM email_templates WHERE id = $1", templateID).Scan(&subject, &body)
-				if err != nil {
-					log.Printf("[Worker] Failed to fetch template %d: %v", templateID, err)
-					status = "failed"
-					output = "Failed to fetch template"
-					exec.HasFailed = true
-				} else {
-					// Extract Recipient from Context
-					recipient := ""
-					if exec.Context.Valid {
-						var ctxData map[string]interface{}
-						if err := json.Unmarshal([]byte(exec.Context.String), &ctxData); err == nil {
-							if email, ok := ctxData["email"].(string); ok {
-								recipient = email
-							} else if _, ok := ctxData["person_id"].(float64); ok {
-								// TODO: Fetch person email if ID provided?
-								// For now MVP expects email in context
-							}
-						}
-					}
-
-					// Fallback: If no recipient, check if we want to default to something (or fail)
-					if recipient == "" {
-						// MVP: Log warning, ideally fail
-						log.Printf("[Worker] No recipient email found in context for execution %d", exec.ID)
-						// For testing convenience, we might skip fail if it's a test run
-						status = "failed"
-						output = "No recipient email in context"
-						exec.HasFailed = true
-					} else {
-						// Send Email
-						err := outbound.SendEmail(nil, outbound.Email{
-							To:      recipient,
-							From:    "notifications@helpnow.ai", // Default sender
-							Subject: subject,
-							Body:    body,
-						})
-						if err != nil {
-							log.Printf("[Worker] Failed to send email: %v", err)
-							status = "failed"
-							output = "Failed to send email: " + err.Error()
-							exec.HasFailed = true
-						} else {
-							output = fmt.Sprintf("Email sent to %s (Template %d)", recipient, templateID)
-						}
-					}
-				}
-			} else {
-				output = "No template selected"
-			}
+		// Convert Context JSON to map
+		var ctxData map[string]interface{}
+		if exec.Context.Valid {
+			json.Unmarshal([]byte(exec.Context.String), &ctxData)
 		}
 
-		// Mock Fail
-		if actionType == "FAIL" {
-			status = "failed"
-			exec.HasFailed = true
+		actionCtx := actions.ActionContext{
+			ExecutionID: exec.ID,
+			NodeData:    node.Properties,
+			ContextData: ctxData,
 		}
 
-	case "CONDITION":
+		// Look up action
+		if action, ok := actions.Get(actionType); ok {
+			out, err := action.Execute(context.Background(), actionCtx)
+			output = out
+			if err != nil {
+				status = "failed"
+				exec.HasFailed = true
+				Logger.Warnf("[Worker] Action %s failed: %v", actionType, err)
+			}
+		} else {
+			Logger.Warnf("[Worker] Unknown action type: %s", actionType)
+			output = "Unknown action type"
+			// maybe fail?
+		}
+
+	case models.NodeTypeCondition:
 		// logic: e.g. "random" or property check
 		// For MVP, if property "force" is set, use that, else random 50/50
 		force, ok := node.Properties["force"].(string)
@@ -304,7 +257,7 @@ func processSingleExecution(exec ScheduledExecution) {
 			// Extract delay properties
 			// properties map[string]interface{}, so values might be float64 (JSON default) or string
 			// We need to safely convert.
-			
+
 			getFloat := func(key string) float64 {
 				if val, ok := nextNode.Properties[key]; ok {
 					switch v := val.(type) {
@@ -313,8 +266,9 @@ func processSingleExecution(exec ScheduledExecution) {
 					case int:
 						return float64(v)
 					case string:
-						// Try parsing if string? For now assume valid JSON number types
-						return 0
+						if f, err := strconv.ParseFloat(v, 64); err == nil {
+							return f
+						}
 					}
 				}
 				return 0
@@ -322,7 +276,7 @@ func processSingleExecution(exec ScheduledExecution) {
 
 			days := getFloat("delay_days")
 			hours := getFloat("delay_hours")
-			
+
 			if days > 0 {
 				delayDuration += time.Duration(days) * 24 * time.Hour
 			}
@@ -333,8 +287,8 @@ func processSingleExecution(exec ScheduledExecution) {
 
 		// Schedule next node
 		nextRunAt := time.Now().Add(delayDuration)
-		log.Printf("[Worker] Scheduling next node %s to run at %s (Delay: %s)\n", nextNodeID, nextRunAt.Format(time.RFC3339), delayDuration)
-		
+		Logger.Infof("[Worker] Scheduling next node %s to run at %s (Delay: %s)", nextNodeID, nextRunAt.Format(time.RFC3339), delayDuration)
+
 		updateExecutionNode(exec.ID, nextNodeID, nextRunAt)
 	} else {
 		// End of flow
@@ -367,7 +321,7 @@ func updateExecutionNode(executionID int, nextNodeID string, nextRunAt time.Time
 		WHERE id = $3
 	`, nextNodeID, nextRunAt, executionID)
 	if err != nil {
-		log.Println("Failed to update execution node:", err)
+		Logger.Error("Failed to update execution node:", err)
 	}
 }
 
@@ -378,6 +332,6 @@ func markExecutionFinal(executionID int, status string, resultReason string) {
 		WHERE id = $1
 	`, executionID, status, resultReason)
 	if err != nil {
-		log.Println("Failed to mark execution final:", err)
+		Logger.Error("Failed to mark execution final:", err)
 	}
 }

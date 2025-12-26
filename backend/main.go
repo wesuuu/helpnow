@@ -8,6 +8,7 @@ import (
 	"github.com/joho/godotenv"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
+	"github.com/wesuuu/helpnow/backend/actions"
 	"github.com/wesuuu/helpnow/backend/clients"
 	"github.com/wesuuu/helpnow/backend/db"
 	"github.com/wesuuu/helpnow/backend/handlers"
@@ -23,6 +24,9 @@ func main() {
 
 	// Initialize Database
 	db.InitDB()
+
+	// Register Workflow Actions
+	actions.RegisterStandardActions()
 
 	// Initialize Echo
 	e := echo.New()
@@ -99,6 +103,8 @@ func main() {
 	e.GET("/people", handlers.ListPeople)
 	e.POST("/audiences/:id/members", handlers.AddPersonToAudience)
 	e.GET("/audiences/:id/members", handlers.GetAudienceMembers)
+	e.POST("/people/:id/events", handlers.AppendPersonEvent)
+	e.PUT("/people/:id/history", handlers.UpdatePersonHistory)
 
 	// Signup Campaigns
 	e.POST("/signup-campaigns", handlers.CreateSignupCampaign)
@@ -115,6 +121,8 @@ func main() {
 	// Workflows & Events
 	e.POST("/workflows", handlers.CreateWorkflow)
 	e.GET("/workflows", handlers.ListWorkflows)
+	e.GET("/workflows/:id", handlers.GetWorkflow)
+	e.PUT("/workflows/:id", handlers.UpdateWorkflow)
 	e.POST("/events/definitions", handlers.CreateEventDefinition)
 	e.GET("/events/definitions", handlers.ListEventDefinitions)
 
@@ -133,6 +141,20 @@ func main() {
 			e.Logger.Fatal("Failed to seed organization:", err)
 		}
 	}
+
+	// Seed "Do not call" Audience
+	var dncCount int
+	db.GetDB().QueryRow("SELECT COUNT(*) FROM audiences WHERE organization_id = 1 AND name = 'Do not call'").Scan(&dncCount)
+	if dncCount == 0 {
+		_, err := db.GetDB().Exec("INSERT INTO audiences (organization_id, name, description) VALUES (1, 'Do not call', 'People who should not be contacted')")
+		if err != nil {
+			log.Println("Failed to seed Do not call audience:", err)
+		}
+	}
+
+	// Manual Migration for people.score and event_history
+	db.GetDB().Exec("ALTER TABLE people ADD COLUMN IF NOT EXISTS score INTEGER DEFAULT 0")
+	db.GetDB().Exec("ALTER TABLE people ADD COLUMN IF NOT EXISTS event_history JSONB")
 
 	// Seed Site 1 if not exists
 	var siteCount int
@@ -163,6 +185,17 @@ func main() {
 		site_id INTEGER,
 		path TEXT,
 		created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+	)`)
+
+	db.GetDB().Exec(`CREATE TABLE IF NOT EXISTS content_templates (
+		id SERIAL PRIMARY KEY,
+		organization_id INTEGER REFERENCES organizations(id),
+		name TEXT NOT NULL,
+		type TEXT NOT NULL,
+		content TEXT,
+		schema JSONB,
+		created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+		updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 	)`)
 
 	// Seed Event Definitions
@@ -205,6 +238,13 @@ func main() {
 	e.POST("/campaigns/:id/content", handlers.GenerateCampaignContent) // POST to trigger generation
 	e.PUT("/campaigns/:id", handlers.UpdateCampaign)
 	e.GET("/campaigns/:id/runs", handlers.ListCampaignRuns)
+
+	// Content Templates
+	e.POST("/templates", handlers.CreateContentTemplate)
+	e.GET("/templates", handlers.ListContentTemplates)
+	e.GET("/templates/:id", handlers.GetContentTemplate)
+	e.PUT("/templates/:id", handlers.UpdateContentTemplate)
+	e.DELETE("/templates/:id", handlers.DeleteContentTemplate)
 
 	// Start Scheduler
 	scheduler.Start()

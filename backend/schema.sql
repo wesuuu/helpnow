@@ -69,6 +69,8 @@ CREATE TABLE IF NOT EXISTS people (
     gender TEXT,
     location TEXT,
     last_interaction_at TIMESTAMP WITH TIME ZONE,
+    score INTEGER DEFAULT 0,
+    event_history JSONB,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
@@ -203,6 +205,17 @@ CREATE TABLE IF NOT EXISTS email_templates (
     name TEXT NOT NULL,
     subject TEXT NOT NULL,
     body TEXT NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS content_templates (
+    id SERIAL PRIMARY KEY,
+    organization_id INTEGER REFERENCES organizations(id),
+    name TEXT NOT NULL,
+    type TEXT NOT NULL, -- 'AD', 'FORM', 'LANDING_PAGE'
+    content TEXT, -- HTML, Markdown, or JSON structure
+    schema JSONB, -- JSON schema for variables
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );

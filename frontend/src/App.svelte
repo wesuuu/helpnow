@@ -14,9 +14,11 @@
     import TeamSettings from "./pages/TeamSettings.svelte";
     import UserSettings from "./pages/UserSettings.svelte";
     import EmailSettings from "./pages/EmailSettings.svelte";
+    import ContentTemplates from "./pages/ContentTemplates.svelte";
     import Layout from "./lib/Layout.svelte";
     import { auth } from "./stores/auth.js";
     import { router } from "./lib/router.svelte.js";
+    import ToastContainer from "./lib/components/ToastContainer.svelte";
 
     // Redirect to login if not authenticated and trying to access protected route
     $effect(() => {
@@ -31,6 +33,7 @@
 </script>
 
 <div>
+    <ToastContainer />
     <Route path="/login" component={Login} />
     <Route path="/register" component={Register} />
 
@@ -48,6 +51,7 @@
             <Route path="/team-settings" component={TeamSettings} />
             <Route path="/user-settings" component={UserSettings} />
             <Route path="/email-settings" component={EmailSettings} />
+            <Route path="/templates" component={ContentTemplates} />
             <Route path="/" component={Dashboard} />
         </Layout>
     {/if}

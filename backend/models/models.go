@@ -144,6 +144,8 @@ type Person struct {
 	Gender            string     `json:"gender"`
 	Location          string     `json:"location"`
 	LastInteractionAt *time.Time `json:"last_interaction_at"`
+	Score             *int       `json:"score"`
+	EventHistory      string     `json:"event_history"` // JSON string
 	CreatedAt         time.Time  `json:"created_at"`
 }
 
@@ -163,4 +165,15 @@ type Site struct {
 	URL            string    `json:"url"`
 	TrackingID     string    `json:"tracking_id"`
 	CreatedAt      time.Time `json:"created_at"`
+}
+
+type ContentTemplate struct {
+	ID             int       `json:"id"`
+	OrganizationID int       `json:"organization_id"`
+	Name           string    `json:"name"`
+	Type           string    `json:"type"`
+	Content        string    `json:"content"`
+	Schema         string    `json:"schema"` // JSON string
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
