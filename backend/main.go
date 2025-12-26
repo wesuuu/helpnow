@@ -13,6 +13,7 @@ import (
 	"github.com/wesuuu/helpnow/backend/db"
 	"github.com/wesuuu/helpnow/backend/handlers"
 	"github.com/wesuuu/helpnow/backend/scheduler"
+	"github.com/wesuuu/helpnow/backend/secrets"
 )
 
 func main() {
@@ -31,7 +32,6 @@ func main() {
 	// Initialize Echo
 	e := echo.New()
 
-	// Middleware
 	// Middleware
 	e.Use(middleware.LoggerWithConfig(middleware.LoggerConfig{
 		Format: "${time_rfc3339} | ${status} | ${latency_human} | ${method} ${uri}\n",
@@ -55,6 +55,13 @@ func main() {
 	clients.InitAIClient()
 	defer clients.GlobalAIClient.Close()
 
+	// Initialize Secret Store
+	if err := secrets.InitSecretStore(); err != nil {
+		log.Printf("Warning: Failed to initialize secret store: %v", err)
+	} else {
+		log.Println("Secret Store initialized")
+	}
+
 	// Auth
 	e.POST("/register", handlers.Register)
 	e.POST("/login", handlers.Login)
@@ -62,6 +69,9 @@ func main() {
 	// Agents
 	e.POST("/agents", handlers.CreateAgent)
 	e.GET("/agents", handlers.ListAgents)
+	e.GET("/agents/:id", handlers.GetAgent)
+	e.PUT("/agents/:id", handlers.UpdateAgent)
+	e.DELETE("/agents/:id", handlers.DeleteAgent)
 
 	// Routines
 	e.POST("/routines", handlers.CreateRoutine)
@@ -101,10 +111,10 @@ func main() {
 	// People & Audience Members
 	e.POST("/people", handlers.CreatePerson)
 	e.GET("/people", handlers.ListPeople)
+	e.GET("/people/:id", handlers.GetPerson)
 	e.POST("/audiences/:id/members", handlers.AddPersonToAudience)
 	e.GET("/audiences/:id/members", handlers.GetAudienceMembers)
 	e.POST("/people/:id/events", handlers.AppendPersonEvent)
-	e.PUT("/people/:id/history", handlers.UpdatePersonHistory)
 
 	// Signup Campaigns
 	e.POST("/signup-campaigns", handlers.CreateSignupCampaign)
@@ -152,9 +162,16 @@ func main() {
 		}
 	}
 
-	// Manual Migration for people.score and event_history
-	db.GetDB().Exec("ALTER TABLE people ADD COLUMN IF NOT EXISTS score INTEGER DEFAULT 0")
-	db.GetDB().Exec("ALTER TABLE people ADD COLUMN IF NOT EXISTS event_history JSONB")
+	// Campaigns Migration (Simplified - Manual Rename assumed or done by schema if fresh)
+	// We just ensure columns exist on 'campaigns' table.
+	// If 'campaigns' table doesn't exist (because it's still email_campaigns), these will fail safely (logged error but continued execution if I didn't check err... wait Exec returns err).
+	// db.GetDB().Exec ignores return values if not assigned?
+	// In Go, "_, _ = ..." or just "db.GetDB().Exec(...)" is valid statement value discard? Yes.
+
+	db.GetDB().Exec("ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS type TEXT")
+	db.GetDB().Exec("ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS workflow_id INTEGER REFERENCES workflows(id)")
+	db.GetDB().Exec("ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS primary_goal TEXT")
+	db.GetDB().Exec("ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS kpis JSONB")
 
 	// Seed Site 1 if not exists
 	var siteCount int
@@ -166,7 +183,7 @@ func main() {
 		}
 	}
 
-	// Create Metric Tables (corresponding to backend events)
+	// Create Metric Tables
 	db.GetDB().Exec(`CREATE TABLE IF NOT EXISTS metric_signups (
 		id SERIAL PRIMARY KEY,
 		site_id INTEGER,
@@ -240,6 +257,7 @@ func main() {
 	e.GET("/campaigns/:id/runs", handlers.ListCampaignRuns)
 
 	// Content Templates
+	e.POST("/templates/generate", handlers.GenerateTemplateContent)
 	e.POST("/templates", handlers.CreateContentTemplate)
 	e.GET("/templates", handlers.ListContentTemplates)
 	e.GET("/templates/:id", handlers.GetContentTemplate)

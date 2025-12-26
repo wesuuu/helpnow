@@ -13,6 +13,7 @@
         bottom,
         onclick,
         type = "node",
+        nodeType, // Add nodeType prop
         cx,
         cy,
     }: {
@@ -23,6 +24,7 @@
         bottom: number | undefined;
         onclick: () => void;
         type?: "node" | "edge" | "pane";
+        nodeType?: string; // TRIGGER, ACTION, CONDITION
         cx?: number;
         cy?: number;
     } = $props();
@@ -31,19 +33,17 @@
     const updateNodeInternals = useUpdateNodeInternals();
     const { deleteElements, screenToFlowPosition } = useSvelteFlow();
 
-    function switchHandlePosition() {
+    function setHandlePosition(pos: "top" | "right" | "bottom" | "left") {
         const nodeIndex = nodes.current.findIndex((n) => n.id === id);
         if (nodeIndex !== -1) {
             const node = nodes.current[nodeIndex];
-            const currentPos = node.data.handlePosition || "right";
-            const newPos = currentPos === "right" ? "left" : "right";
 
             // Update the node data
             const updatedNode = {
                 ...node,
                 data: {
                     ...node.data,
-                    handlePosition: newPos,
+                    handlePosition: pos,
                 },
             };
 
@@ -53,14 +53,76 @@
             nodes.set(newNodes);
 
             // Force update node internals to fix edge positions
-            // We need to wait for the DOM to update, so requestAnimationFrame or setTimeout might be needed
-            // but usually calling it after set is enough if reactive.
-            // Let's wrap in setTimeout to be safe as the DOM needs to reflow first.
             setTimeout(() => {
                 updateNodeInternals(id);
             }, 0);
         }
         if (onclick) onclick();
+    }
+
+    // For Action/Condition nodes: set axis (Vertical vs Horizontal)
+    // Horizontal -> Right (default)
+    // Vertical -> Bottom (default for vertical)
+    function setHandleAxis(axis: "horizontal" | "vertical") {
+        if (axis === "horizontal") {
+            setHandlePosition("right");
+        } else {
+            setHandlePosition("bottom");
+        }
+    }
+
+    function swapYesNo() {
+        const nodeIndex = nodes.current.findIndex((n) => n.id === id);
+        if (nodeIndex !== -1) {
+            const node = nodes.current[nodeIndex];
+            const currentSwap = node.data.swapYesNo || false;
+
+            const updatedNode = {
+                ...node,
+                data: {
+                    ...node.data,
+                    swapYesNo: !currentSwap,
+                },
+            };
+
+            const newNodes = [...nodes.current];
+            newNodes[nodeIndex] = updatedNode;
+            nodes.set(newNodes);
+
+            setTimeout(() => {
+                updateNodeInternals(id);
+            }, 0);
+        }
+        if (onclick) onclick();
+    }
+
+    function swapHandlePosition() {
+        const nodeIndex = nodes.current.findIndex((n) => n.id === id);
+        if (nodeIndex !== -1) {
+            const node = nodes.current[nodeIndex];
+            const currentPos = node.data.handlePosition || "right";
+            let newPos;
+
+            switch (currentPos) {
+                case "right":
+                    newPos = "left";
+                    break;
+                case "left":
+                    newPos = "right";
+                    break;
+                case "top":
+                    newPos = "bottom";
+                    break;
+                case "bottom":
+                    newPos = "top";
+                    break;
+                default:
+                    newPos = "right";
+            }
+
+            // Reuse setHandlePosition logic essentially
+            setHandlePosition(newPos as "top" | "right" | "bottom" | "left");
+        }
     }
 
     async function deleteItem() {
@@ -109,8 +171,93 @@
     {/if}
 
     {#if type === "node"}
-        <button onclick={switchHandlePosition}>Switch Handles Side</button>
-        <button onclick={deleteItem} class="text-red-500 hover:!bg-red-50"
+        <div class="mb-2 pb-2 border-b border-gray-100">
+            <p class="px-4 py-1 text-xs text-gray-500 font-semibold">
+                Handle Position
+            </p>
+
+            {#if nodeType === "TRIGGER"}
+                <!-- Trigger: Top, Bottom, Left, Right -->
+                <div class="grid grid-cols-2 gap-1 px-2 mb-2">
+                    <button
+                        class="text-xs border rounded hover:bg-gray-50 text-center justify-center pointer-events-auto"
+                        onclick={() => setHandlePosition("top")}>Top</button
+                    >
+                    <button
+                        class="text-xs border rounded hover:bg-gray-50 text-center justify-center pointer-events-auto"
+                        onclick={() => setHandlePosition("bottom")}
+                        >Bottom</button
+                    >
+                    <button
+                        class="text-xs border rounded hover:bg-gray-50 text-center justify-center pointer-events-auto"
+                        onclick={() => setHandlePosition("left")}>Left</button
+                    >
+                    <button
+                        class="text-xs border rounded hover:bg-gray-50 text-center justify-center pointer-events-auto"
+                        onclick={() => setHandlePosition("right")}>Right</button
+                    >
+                </div>
+            {:else if nodeType === "ACTION"}
+                <!-- Action: Vertical (Top/Bottom), Horizontal (Left/Right) -->
+                <div class="grid grid-cols-1 gap-1 px-2 mb-2">
+                    <button
+                        class="text-xs border rounded hover:bg-gray-50 text-center justify-center pointer-events-auto"
+                        onclick={() => setHandleAxis("vertical")}
+                        >Top - Bottom (Vertical)</button
+                    >
+                    <button
+                        class="text-xs border rounded hover:bg-gray-50 text-center justify-center pointer-events-auto"
+                        onclick={() => setHandleAxis("horizontal")}
+                        >Left - Right (Horizontal)</button
+                    >
+                </div>
+            {:else if nodeType === "CONDITION"}
+                <!-- Condition: Vertical, Horizontal, Swap Yes/No -->
+                <div class="grid grid-cols-1 gap-1 px-2 mb-2">
+                    <button
+                        class="text-xs border rounded hover:bg-gray-50 text-center justify-center pointer-events-auto"
+                        onclick={() => setHandleAxis("vertical")}
+                        >Top - Bottom (Vertical)</button
+                    >
+                    <button
+                        class="text-xs border rounded hover:bg-gray-50 text-center justify-center pointer-events-auto"
+                        onclick={() => setHandleAxis("horizontal")}
+                        >Left - Right (Horizontal)</button
+                    >
+                </div>
+                <!-- Separate section for "Swap Yes/No" -->
+                <button
+                    onclick={swapYesNo}
+                    class="text-blue-600 hover:bg-blue-50 font-medium w-full text-center pointer-events-auto"
+                >
+                    Swap Yes/No ⇄
+                </button>
+            {:else}
+                <!-- Default Fallback (if any other node type) -->
+                <div class="grid grid-cols-2 gap-1 px-2 mb-2">
+                    <button
+                        class="text-xs border rounded hover:bg-gray-50 text-center justify-center pointer-events-auto"
+                        onclick={() => setHandlePosition("top")}>Top</button
+                    >
+                    <button
+                        class="text-xs border rounded hover:bg-gray-50 text-center justify-center pointer-events-auto"
+                        onclick={() => setHandlePosition("bottom")}
+                        >Bottom</button
+                    >
+                    <button
+                        class="text-xs border rounded hover:bg-gray-50 text-center justify-center pointer-events-auto"
+                        onclick={() => setHandlePosition("left")}>Left</button
+                    >
+                    <button
+                        class="text-xs border rounded hover:bg-gray-50 text-center justify-center pointer-events-auto"
+                        onclick={() => setHandlePosition("right")}>Right</button
+                    >
+                </div>
+            {/if}
+        </div>
+        <button
+            onclick={deleteItem}
+            class="text-red-500 hover:!bg-red-50 pointer-events-auto"
             >Delete Node</button
         >
     {/if}

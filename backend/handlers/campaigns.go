@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"database/sql"
+	"encoding/json"
 	"net/http"
 	"time"
 
@@ -11,18 +12,28 @@ import (
 )
 
 func CreateCampaign(c echo.Context) error {
-	var campaign models.EmailCampaign
+	var campaign models.Campaign
 	if err := c.Bind(&campaign); err != nil {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid input"})
 	}
 
 	// Status defaults to DRAFT
-	campaign.Status = "DRAFT"
+	if campaign.Status == "" {
+		campaign.Status = "DRAFT"
+	}
+	// Default type to EMAIL if missing (legacy support)
+	if campaign.Type == "" {
+		campaign.Type = models.CampaignTypeEmail
+	}
 
-	query := `INSERT INTO email_campaigns (organization_id, audience_segment_id, name, prompt, status) VALUES ($1, $2, $3, $4, $5) RETURNING id, created_at`
+	// Marshall KPIs to JSON
+	kpisJSON, _ := json.Marshal(campaign.KPIs)
+
+	query := `INSERT INTO campaigns (organization_id, audience_segment_id, type, workflow_id, name, primary_goal, kpis, prompt, status) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id, created_at`
 	dbConn := db.GetDB()
-	err := dbConn.QueryRow(query, campaign.OrganizationID, campaign.AudienceSegmentID, campaign.Name, campaign.Prompt, campaign.Status).Scan(&campaign.ID, &campaign.CreatedAt)
+	err := dbConn.QueryRow(query, campaign.OrganizationID, campaign.AudienceSegmentID, campaign.Type, campaign.WorkflowID, campaign.Name, campaign.PrimaryGoal, kpisJSON, campaign.Prompt, campaign.Status).Scan(&campaign.ID, &campaign.CreatedAt)
 	if err != nil {
+		c.Logger().Error("Failed to create campaign: ", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to create campaign"})
 	}
 
@@ -32,10 +43,9 @@ func CreateCampaign(c echo.Context) error {
 func GenerateCampaignContent(c echo.Context) error {
 	id := c.Param("id")
 
-	// Fetch campaign prompt
 	var prompt string
 	var orgID int
-	err := db.GetDB().QueryRow("SELECT prompt, organization_id FROM email_campaigns WHERE id = $1", id).Scan(&prompt, &orgID)
+	err := db.GetDB().QueryRow("SELECT prompt, organization_id FROM campaigns WHERE id = $1", id).Scan(&prompt, &orgID)
 	if err != nil {
 		return c.JSON(http.StatusNotFound, map[string]string{"error": "Campaign not found"})
 	}
@@ -56,7 +66,7 @@ func GenerateCampaignContent(c echo.Context) error {
 	generatedContent := "Subject: Special Offer for You!\n\nHi there,\n\n" + prompt + "\n\nBest,\nHelpNow Team"
 
 	// Update campaign content
-	_, err = db.GetDB().Exec("UPDATE email_campaigns SET content = $1 WHERE id = $2", generatedContent, id)
+	_, err = db.GetDB().Exec("UPDATE campaigns SET content = $1 WHERE id = $2", generatedContent, id)
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to save generated content"})
 	}
@@ -66,7 +76,7 @@ func GenerateCampaignContent(c echo.Context) error {
 
 func UpdateCampaign(c echo.Context) error {
 	id := c.Param("id")
-	var req models.EmailCampaign
+	var req models.Campaign
 	if err := c.Bind(&req); err != nil {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid input"})
 	}
@@ -78,9 +88,15 @@ func UpdateCampaign(c echo.Context) error {
 		req.NextRunAt = &now
 	}
 
-	query := `UPDATE email_campaigns SET content = $1, schedule_interval = $2, status = $3, next_run_at = $4 WHERE id = $5`
+	// Marshall KPIs to JSON if present (partial updates might need careful handling, but usually full object sent or specific fields)
+	// For simplify, assuming full update or text fields. KPIs update requires more logic if partial.
+	// Let's assume JSON input handles it.
+
+	// Dynamic update is better but explicit for now
+	query := `UPDATE campaigns SET content = $1, schedule_interval = $2, status = $3, next_run_at = $4 WHERE id = $5`
 	_, err := db.GetDB().Exec(query, req.Content, req.ScheduleInterval, req.Status, req.NextRunAt, id)
 	if err != nil {
+		c.Logger().Error("Failed to update campaign: ", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to update campaign"})
 	}
 
@@ -90,21 +106,26 @@ func UpdateCampaign(c echo.Context) error {
 func ListCampaigns(c echo.Context) error {
 	orgID := c.QueryParam("organization_id")
 
-	rows, err := db.GetDB().Query("SELECT id, organization_id, audience_segment_id, name, prompt, content, schedule_interval, next_run_at, status, created_at FROM email_campaigns WHERE organization_id = $1", orgID)
+	rows, err := db.GetDB().Query("SELECT id, organization_id, audience_segment_id, type, workflow_id, name, primary_goal, COALESCE(kpis::text, '[]'), prompt, content, schedule_interval, next_run_at, status, created_at FROM campaigns WHERE organization_id = $1", orgID)
 	if err != nil {
+		c.Logger().Error("Failed to fetch campaigns: ", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to fetch campaigns"})
 	}
 	defer rows.Close()
 
-	campaigns := []models.EmailCampaign{}
+	campaigns := []models.Campaign{}
 	for rows.Next() {
-		var c models.EmailCampaign
+		var c models.Campaign
 		var content, interval sql.NullString // Handle nulls
-		if err := rows.Scan(&c.ID, &c.OrganizationID, &c.AudienceSegmentID, &c.Name, &c.Prompt, &content, &interval, &c.NextRunAt, &c.Status, &c.CreatedAt); err != nil {
+		var kpisString string
+		if err := rows.Scan(&c.ID, &c.OrganizationID, &c.AudienceSegmentID, &c.Type, &c.WorkflowID, &c.Name, &c.PrimaryGoal, &kpisString, &c.Prompt, &content, &interval, &c.NextRunAt, &c.Status, &c.CreatedAt); err != nil {
 			continue
 		}
 		c.Content = content.String
 		c.ScheduleInterval = interval.String
+		if kpisString != "" {
+			json.Unmarshal([]byte(kpisString), &c.KPIs)
+		}
 		campaigns = append(campaigns, c)
 	}
 

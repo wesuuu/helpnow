@@ -23,8 +23,8 @@
       }
 
       const data = await resp.json();
-      // data should contain { token: "...", user_email: "..." }
-      login(data.token, { email: data.user_email });
+      // data should contain { token: "...", user: {...} }
+      login(data.token, data.user);
       router.navigate("/dashboard");
     } catch (e) {
       error = "Invalid credentials";

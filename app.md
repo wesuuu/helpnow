@@ -93,3 +93,66 @@ Workflows can deliver customer data to other apps and databases.
 
 - researcher: find influencer contact info, send intro emails, schedule followups
 - content creation:
+
+
+
+## Standard workflow actions
+
+- Send Ad
+- Send Email
+- Apply Coupon
+- Send Feedback
+- Send GDPR Request
+- Send Webhook
+- Send Slack Message
+- Send SMS
+
+
+We need to update the agent objects to have a configuration section. This will be a json which can store things required for model providers and since this configuration may contain sensitive information like API_KEYS, you should store them in vault 
+
+
+## Specific workflows
+
+- Campaigns
+- Audience Segmentation & Enrichment
+
+## Plugins
+
+Categorize by:
+- Enrichment
+- Data Sources
+- eCommerce
+- Social Media
+- Email
+- SEO
+- CRM
+
+## Tabs
+
+- Campaigns
+  - Email
+  - Ad
+  - Social Media
+  - Blog
+  - SEO
+
+- Audience Segmentation & Enrichment
+  - Audiences
+  - 
+- Plugins
+
+## Analytics
+
+Attention metrics
+- subscriptions
+- ratings
+- reach
+- impressions
+- engagement
+
+Conversion metrics
+- sales
+- leads
+- signups
+- signins
+- downloads

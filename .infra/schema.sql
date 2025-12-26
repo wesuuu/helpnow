@@ -10,7 +10,9 @@ CREATE TABLE IF NOT EXISTS users (
     organization_id INTEGER REFERENCES organizations(id),
     email TEXT NOT NULL UNIQUE,
     password_hash TEXT NOT NULL,
-    full_name TEXT,
+    first_name TEXT,
+    middle_name TEXT,
+    last_name TEXT,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
@@ -18,7 +20,7 @@ CREATE TABLE IF NOT EXISTS agents (
     id SERIAL PRIMARY KEY,
     organization_id INTEGER REFERENCES organizations(id),
     name TEXT NOT NULL,
-    type TEXT NOT NULL,
+    description TEXT,
     model_config TEXT,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
@@ -62,13 +64,23 @@ CREATE TABLE IF NOT EXISTS audiences (
 CREATE TABLE IF NOT EXISTS people (
     id SERIAL PRIMARY KEY,
     organization_id INTEGER REFERENCES organizations(id),
-    full_name TEXT NOT NULL,
+    first_name TEXT,
+    last_name TEXT,
     email TEXT,
     age INTEGER,
     ethnicity TEXT,
     gender TEXT,
     location TEXT,
     last_interaction_at TIMESTAMP WITH TIME ZONE,
+    score INTEGER DEFAULT 0,
+    meta JSONB,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS person_events (
+    id SERIAL PRIMARY KEY,
+    person_id INTEGER REFERENCES people(id),
+    event JSONB,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
@@ -82,16 +94,19 @@ CREATE TABLE IF NOT EXISTS audience_memberships (
 CREATE TABLE IF NOT EXISTS audience_segments (
     id SERIAL PRIMARY KEY,
     audience_id INTEGER REFERENCES audiences(id),
-    name TEXT NOT NULL,
-    filters TEXT, -- JSON criteria
+    type TEXT NOT NULL,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
-CREATE TABLE IF NOT EXISTS email_campaigns (
+CREATE TABLE IF NOT EXISTS campaigns (
     id SERIAL PRIMARY KEY,
     organization_id INTEGER REFERENCES organizations(id),
     audience_segment_id INTEGER REFERENCES audience_segments(id),
+    type TEXT,
+    workflow_id INTEGER REFERENCES workflows(id),
     name TEXT NOT NULL,
+    primary_goal TEXT,
+    kpis JSONB,
     prompt TEXT,
     content TEXT,
     schedule_interval TEXT, -- 'DAILY', 'WEEKLY', etc.
@@ -102,7 +117,7 @@ CREATE TABLE IF NOT EXISTS email_campaigns (
 
 CREATE TABLE IF NOT EXISTS campaign_runs (
     id SERIAL PRIMARY KEY,
-    campaign_id INTEGER REFERENCES email_campaigns(id),
+    campaign_id INTEGER REFERENCES campaigns(id),
     sent_count INTEGER DEFAULT 0,
     success_rate FLOAT DEFAULT 0,
     executed_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
@@ -137,11 +152,15 @@ CREATE TABLE IF NOT EXISTS event_definitions (
 
 CREATE TABLE IF NOT EXISTS workflows (
     id SERIAL PRIMARY KEY,
-    site_id INTEGER REFERENCES sites(id),
+    organization_id INTEGER REFERENCES organizations(id), -- New: Owner org
+    site_id INTEGER REFERENCES sites(id), -- Nullable now if org-level
+    audience_id INTEGER REFERENCES audiences(id), -- New: Context for schedule
     name TEXT NOT NULL,
-    trigger_type TEXT NOT NULL, -- 'EVENT'
-    trigger_event TEXT NOT NULL, -- event name matches event_definitions.name OR standard events
+    trigger_type TEXT NOT NULL, -- 'EVENT', 'SCHEDULE'
+    trigger_event TEXT, -- Name of event if type=EVENT
     steps TEXT NOT NULL, -- JSON array of steps
+    schedule TEXT, -- New: Cron expression or interval
+    next_run_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(), -- New: For scheduling
     status TEXT DEFAULT 'ACTIVE', -- ACTIVE, PAUSED
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
@@ -150,10 +169,13 @@ CREATE TABLE IF NOT EXISTS workflow_executions (
     id SERIAL PRIMARY KEY,
     workflow_id INTEGER REFERENCES workflows(id),
     subject_id INTEGER, -- Optional: Link to a 'people' record if applicable
-    current_step INTEGER DEFAULT 0,
+    current_step INTEGER DEFAULT 0, -- Deprecated in favor of current_node_id for Graph workflows
+    current_node_id TEXT, -- ID of the current node in the graph
     status TEXT NOT NULL, -- PENDING, COMPLETED, FAILED
     next_run_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     context TEXT, -- JSON blob of event data
+    step_results TEXT, -- JSON array of results from each step
+    has_failed BOOLEAN DEFAULT FALSE, -- Track if any step has failed
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     finished_at TIMESTAMP WITH TIME ZONE
 );
@@ -163,7 +185,6 @@ CREATE TABLE IF NOT EXISTS data_sources (
     organization_id INTEGER REFERENCES organizations(id),
     name TEXT NOT NULL,
     type TEXT NOT NULL, -- 'POSTGRES', 'DATABRICKS', 'WEBHOOK'
-    config TEXT, -- JSON connection details
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
@@ -177,4 +198,36 @@ CREATE TABLE IF NOT EXISTS data_syncs (
     status TEXT NOT NULL, -- 'PENDING', 'RUNNING', 'COMPLETED', 'FAILED'
     last_run_at TIMESTAMP WITH TIME ZONE,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS email_domains (
+    id SERIAL PRIMARY KEY,
+    organization_id INTEGER REFERENCES organizations(id),
+    domain TEXT NOT NULL,
+    dkim_record TEXT,
+    spf_record TEXT,
+    is_verified BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    UNIQUE(organization_id, domain)
+);
+
+CREATE TABLE IF NOT EXISTS email_templates (
+    id SERIAL PRIMARY KEY,
+    organization_id INTEGER REFERENCES organizations(id),
+    name TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    body TEXT NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS content_templates (
+    id SERIAL PRIMARY KEY,
+    organization_id INTEGER REFERENCES organizations(id),
+    name TEXT NOT NULL,
+    type TEXT NOT NULL, -- 'AD', 'FORM', 'LANDING_PAGE'
+    content TEXT, -- HTML, Markdown, or JSON structure
+    schema JSONB, -- JSON schema for variables
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );

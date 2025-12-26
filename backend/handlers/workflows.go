@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/labstack/echo/v4"
@@ -78,8 +79,17 @@ func CreateWorkflow(c echo.Context) error {
 	// For now, keep saving them as is (binding form input) BUT ALSO parse graph.
 	err := db.GetDB().QueryRow(query, wf.OrganizationID, wf.SiteID, wf.AudienceID, wf.Name, wf.TriggerType, wf.TriggerEvent, wf.Steps, wf.Schedule, wf.NextRunAt, "ACTIVE").Scan(&wf.ID, &wf.CreatedAt)
 	if err != nil {
+		// Check for unique constraint violation (Postgres code 23505)
+		if pqErr, ok := err.(*pq.Error); ok && pqErr.Code == "23505" {
+			return c.JSON(http.StatusConflict, map[string]string{"error": "Workflow with this name already exists"})
+		}
+		// Fallback check for string
+		errStr := err.Error()
+		if strings.Contains(errStr, "duplicate key") || strings.Contains(errStr, "unique constraint") {
+			return c.JSON(http.StatusConflict, map[string]string{"error": "Workflow with this name already exists"})
+		}
 		c.Logger().Error("Failed to create workflow: ", err)
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to create workflow"})
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 	}
 	wf.Status = "ACTIVE"
 
@@ -216,6 +226,12 @@ func UpdateWorkflow(c echo.Context) error {
 	query := `UPDATE workflows SET site_id=$1, audience_id=$2, name=$3, trigger_type=$4, trigger_event=$5, steps=$6, schedule=$7, next_run_at=$8 WHERE id=$9`
 	_, err := db.GetDB().Exec(query, wf.SiteID, wf.AudienceID, wf.Name, wf.TriggerType, wf.TriggerEvent, wf.Steps, wf.Schedule, wf.NextRunAt, id)
 	if err != nil {
+		if pqErr, ok := err.(*pq.Error); ok && pqErr.Code == "23505" {
+			return c.JSON(http.StatusConflict, map[string]string{"error": "Workflow with this name already exists"})
+		}
+		if strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "unique constraint") {
+			return c.JSON(http.StatusConflict, map[string]string{"error": "Workflow with this name already exists"})
+		}
 		c.Logger().Error("Failed to update workflow: ", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to update workflow"})
 	}

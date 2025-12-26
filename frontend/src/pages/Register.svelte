@@ -3,13 +3,20 @@
   import { router } from "../lib/router.svelte.js";
   import { login } from "../stores/auth.js";
 
+  let firstName = $state("");
+  let middleName = $state("");
+  let lastName = $state("");
   let email = $state("");
   let password = $state("");
-  let fullName = $state("");
 
   async function handleSubmit(event: Event) {
     event.preventDefault();
-    login("mock-token", { full_name: fullName, email });
+    login("mock-token", {
+      first_name: firstName,
+      middle_name: middleName,
+      last_name: lastName,
+      email,
+    });
     router.navigate("/dashboard");
   }
 </script>
@@ -37,16 +44,41 @@
     <form class="mt-8 space-y-6" onsubmit={handleSubmit}>
       <div class="rounded-md shadow-sm -space-y-px">
         <div>
-          <label for="full-name" class="sr-only">Full Name</label>
+          <label for="first-name" class="sr-only">First Name</label>
           <input
-            id="full-name"
-            name="name"
+            id="first-name"
+            name="firstName"
             type="text"
-            autocomplete="name"
+            autocomplete="given-name"
             required
-            bind:value={fullName}
+            bind:value={firstName}
             class="appearance-none rounded-none relative block w-full px-3 py-2 border border-gray-300 dark:border-gray-700 placeholder-gray-500 text-gray-900 dark:text-white dark:bg-gray-900 rounded-t-md focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 focus:z-10 sm:text-sm"
-            placeholder="Full Name"
+            placeholder="First Name"
+          />
+        </div>
+        <div>
+          <label for="middle-name" class="sr-only">Middle Name</label>
+          <input
+            id="middle-name"
+            name="middleName"
+            type="text"
+            autocomplete="additional-name"
+            bind:value={middleName}
+            class="appearance-none rounded-none relative block w-full px-3 py-2 border border-gray-300 dark:border-gray-700 placeholder-gray-500 text-gray-900 dark:text-white dark:bg-gray-900 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 focus:z-10 sm:text-sm"
+            placeholder="Middle Name (Optional)"
+          />
+        </div>
+        <div>
+          <label for="last-name" class="sr-only">Last Name</label>
+          <input
+            id="last-name"
+            name="lastName"
+            type="text"
+            autocomplete="family-name"
+            required
+            bind:value={lastName}
+            class="appearance-none rounded-none relative block w-full px-3 py-2 border border-gray-300 dark:border-gray-700 placeholder-gray-500 text-gray-900 dark:text-white dark:bg-gray-900 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 focus:z-10 sm:text-sm"
+            placeholder="Last Name"
           />
         </div>
         <div>

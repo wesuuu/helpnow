@@ -26,12 +26,21 @@ const (
 	RoleViewer Role = "viewer"
 )
 
+type CampaignType string
+
+const (
+	CampaignTypeBrandAwareness CampaignType = "brand_awareness"
+	CampaignTypeEmail          CampaignType = "email"
+)
+
 type User struct {
 	ID             int       `json:"id"`
 	OrganizationID int       `json:"organization_id"` // Optional: Users might belong to org directly or via teams
 	Email          string    `json:"email"`
 	PasswordHash   string    `json:"-"`
-	FullName       string    `json:"full_name"`
+	FirstName      *string   `json:"first_name"`
+	MiddleName     *string   `json:"middle_name"`
+	LastName       *string   `json:"last_name"`
 	CreatedAt      time.Time `json:"created_at"`
 }
 
@@ -45,7 +54,7 @@ type Agent struct {
 	ID             int       `json:"id"`
 	OrganizationID int       `json:"organization_id"`
 	Name           string    `json:"name"`
-	Type           string    `json:"type"`         // e.g., "MARKETING"
+	Description    string    `json:"description"`
 	ModelConfig    string    `json:"model_config"` // JSON string for model settings
 	CreatedAt      time.Time `json:"created_at"`
 }
@@ -113,17 +122,21 @@ type AudienceSegment struct {
 	CreatedAt  time.Time `json:"created_at"`
 }
 
-type EmailCampaign struct {
-	ID                int        `json:"id"`
-	OrganizationID    int        `json:"organization_id"`
-	AudienceSegmentID int        `json:"audience_segment_id"`
-	Name              string     `json:"name"`
-	Prompt            string     `json:"prompt"`
-	Content           string     `json:"content"`
-	ScheduleInterval  string     `json:"schedule_interval"`
-	NextRunAt         *time.Time `json:"next_run_at"`
-	Status            string     `json:"status"`
-	CreatedAt         time.Time  `json:"created_at"`
+type Campaign struct {
+	ID                int          `json:"id"`
+	OrganizationID    int          `json:"organization_id"`
+	AudienceSegmentID *int         `json:"audience_segment_id,omitempty"` // Made pointer as it might be optional for some types? Or keep as is.
+	Type              CampaignType `json:"type"`
+	WorkflowID        *int         `json:"workflow_id,omitempty"`
+	Name              string       `json:"name"`
+	PrimaryGoal       string       `json:"primary_goal"`
+	KPIs              []string     `json:"kpis"` // JSON array of strings
+	Prompt            string       `json:"prompt"`
+	Content           string       `json:"content"`
+	ScheduleInterval  string       `json:"schedule_interval"`
+	NextRunAt         *time.Time   `json:"next_run_at"`
+	Status            string       `json:"status"`
+	CreatedAt         time.Time    `json:"created_at"`
 }
 
 type CampaignRun struct {
@@ -134,19 +147,52 @@ type CampaignRun struct {
 	ExecutedAt  time.Time `json:"executed_at"`
 }
 
+type Location struct {
+	City      string  `json:"city,omitempty"`
+	Country   string  `json:"country,omitempty"`
+	Region    string  `json:"region,omitempty"`
+	Latitude  float64 `json:"latitude,omitempty"`
+	Longitude float64 `json:"longitude,omitempty"`
+}
+
+type IPAddress struct {
+	Address   string    `json:"address"`
+	Used      time.Time `json:"used"`
+	Count     int       `json:"count"`
+	UserAgent string    `json:"user_agent"`
+	Location  *Location `json:"location,omitempty"`
+}
+
+type PersonMeta struct {
+	IPAddresses []IPAddress `json:"ip_addresses,omitempty"`
+	Devices     []string    `json:"devices,omitempty"`
+	UserAgents  []string    `json:"user_agents,omitempty"`
+	Location    *Location   `json:"location,omitempty"`
+}
+
+type PersonEvent struct {
+	ID        int         `json:"id"`
+	PersonID  int         `json:"person_id"`
+	Event     interface{} `json:"event"` // JSONB
+	CreatedAt time.Time   `json:"created_at"`
+}
+
 type Person struct {
-	ID                int        `json:"id"`
-	OrganizationID    int        `json:"organization_id"`
-	FullName          string     `json:"full_name"`
-	Email             string     `json:"email"`
-	Age               *int       `json:"age"`
-	Ethnicity         string     `json:"ethnicity"`
-	Gender            string     `json:"gender"`
-	Location          string     `json:"location"`
-	LastInteractionAt *time.Time `json:"last_interaction_at"`
-	Score             *int       `json:"score"`
-	EventHistory      string     `json:"event_history"` // JSON string
-	CreatedAt         time.Time  `json:"created_at"`
+	ID                int           `json:"id"`
+	OrganizationID    int           `json:"organization_id"`
+	FirstName         *string       `json:"first_name"`
+	LastName          *string       `json:"last_name"`
+	Interests         []string      `json:"interests"`
+	Email             string        `json:"email"`
+	Age               *int          `json:"age"`
+	Ethnicity         string        `json:"ethnicity"`
+	Gender            string        `json:"gender"`
+	Location          string        `json:"location"` // Kept as string to match TEXT column
+	LastInteractionAt *time.Time    `json:"last_interaction_at"`
+	Score             *int          `json:"score"`
+	Events            []PersonEvent `json:"events,omitempty"` // populated on detail view
+	Meta              PersonMeta    `json:"meta"`
+	CreatedAt         time.Time     `json:"created_at"`
 }
 
 type SignupCampaign struct {

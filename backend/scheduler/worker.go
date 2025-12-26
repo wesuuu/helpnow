@@ -175,34 +175,52 @@ func processSingleExecution(exec ScheduledExecution) {
 				status = "failed"
 				exec.HasFailed = true
 				Logger.Warnf("[Worker] Action %s failed: %v", actionType, err)
+				// In new design, Action failure doesn't branch. It just marks execution as failed (or continues if we want execution to flow)?
+				// User said: "There should be only a single handle of input and output for an action"
+				// Assuming we still want to stop on failure or continue on 'default'?
+				// If the user removed the fail handle, we likely treat it as linear.
+				// Let's keep status='failed' but handleToFollow='default' so strictly linear.
+				// But we still stop if status == "failed" later in the function (line 216).
+				// Implementation note: If we want it to Continue on error, we shouldn't return at line 219.
+				// For now, let's assume Failure STOPS the workflow (standard behavior) unless caught.
+				// Since we removed 'fail' handle, we probably just stop.
 			}
 		} else {
 			Logger.Warnf("[Worker] Unknown action type: %s", actionType)
 			output = "Unknown action type"
-			// maybe fail?
+			status = "failed"
+			exec.HasFailed = true
 		}
+		// ALWAYS follow default for Action
+		handleToFollow = "default"
 
 	case models.NodeTypeCondition:
-		// logic: e.g. "random" or property check
+		// Logic: Check properties or random
 		// For MVP, if property "force" is set, use that, else random 50/50
 		force, ok := node.Properties["force"].(string)
+		result := false
+
 		if ok {
 			if force == "true" {
-				output = "Condition met (forced)"
-				handleToFollow = "true"
+				result = true
 			} else {
-				output = "Condition failed (forced)"
-				handleToFollow = "false"
+				result = false
 			}
 		} else {
 			// Random
 			if rand.Float32() > 0.5 {
-				output = "Condition met (random)"
-				handleToFollow = "true"
+				result = true
 			} else {
-				output = "Condition failed (random)"
-				handleToFollow = "false"
+				result = false
 			}
+		}
+
+		if result {
+			output = "Condition: True"
+			handleToFollow = "true"
+		} else {
+			output = "Condition: False"
+			handleToFollow = "false"
 		}
 	}
 

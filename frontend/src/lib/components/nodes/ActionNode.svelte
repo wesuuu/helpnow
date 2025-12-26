@@ -13,28 +13,75 @@
     const updateNodeInternals = useUpdateNodeInternals();
 
     // Default to 'left' if not specified
-    const position = $derived(data.handlePosition || "right");
-    const isRight = $derived(position === "right");
+    // Default to 'right' if not specified
+    const handlePos = $derived(data.handlePosition || "bottom");
+
+    const sourcePosition = $derived(
+        handlePos === "left"
+            ? Position.Left
+            : handlePos === "top"
+              ? Position.Top
+              : handlePos === "bottom"
+                ? Position.Bottom
+                : Position.Right,
+    );
+
+    const targetPosition = $derived(
+        handlePos === "left"
+            ? Position.Right
+            : handlePos === "top"
+              ? Position.Bottom
+              : handlePos === "bottom"
+                ? Position.Top
+                : Position.Left,
+    );
 
     $effect(() => {
         // Access position to track changes
-        const _ = position;
-        // Run updateNodeInternals in the next tick/timeout to ensure DOM handles are rendered
+        const _ = handlePos;
+        // Run updateNodeInternals in the next tick to ensure DOM handles are rendered
         setTimeout(() => {
             updateNodeInternals(id);
         }, 0);
     });
+
+    // Label positioning based on handle position
+    const inputLabelClass = $derived.by(() => {
+        if (handlePos === "right")
+            return "absolute right-full mr-2 top-1/2 -translate-y-1/2 text-[10px] bg-slate-100 text-slate-500 px-1 rounded opacity-0 peer-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap z-50 shadow-sm border border-slate-200";
+        if (handlePos === "left")
+            return "absolute left-full ml-2 top-1/2 -translate-y-1/2 text-[10px] bg-slate-100 text-slate-500 px-1 rounded opacity-0 peer-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap z-50 shadow-sm border border-slate-200";
+        if (handlePos === "bottom")
+            return "absolute bottom-full mb-2 left-1/2 -translate-x-1/2 text-[10px] bg-slate-100 text-slate-500 px-1 rounded opacity-0 peer-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap z-50 shadow-sm border border-slate-200";
+        if (handlePos === "top")
+            return "absolute top-full mt-2 left-1/2 -translate-x-1/2 text-[10px] bg-slate-100 text-slate-500 px-1 rounded opacity-0 peer-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap z-50 shadow-sm border border-slate-200";
+        return "";
+    });
+
+    const outputLabelClass = $derived.by(() => {
+        if (handlePos === "right")
+            return "absolute left-full ml-2 top-1/2 -translate-y-1/2 text-[10px] bg-slate-100 text-slate-500 px-1 rounded opacity-0 peer-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap z-50 shadow-sm border border-slate-200";
+        if (handlePos === "left")
+            return "absolute right-full mr-2 top-1/2 -translate-y-1/2 text-[10px] bg-slate-100 text-slate-500 px-1 rounded opacity-0 peer-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap z-50 shadow-sm border border-slate-200";
+        if (handlePos === "bottom")
+            return "absolute top-full mt-2 left-1/2 -translate-x-1/2 text-[10px] bg-slate-100 text-slate-500 px-1 rounded opacity-0 peer-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap z-50 shadow-sm border border-slate-200";
+        if (handlePos === "top")
+            return "absolute bottom-full mb-2 left-1/2 -translate-x-1/2 text-[10px] bg-slate-100 text-slate-500 px-1 rounded opacity-0 peer-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap z-50 shadow-sm border border-slate-200";
+        return "";
+    });
 </script>
 
 <div
-    class="px-3 py-2 rounded-md bg-white border-2 border-blue-500 shadow-md min-w-[180px]"
+    class="px-3 py-2 rounded-md bg-white border-2 border-blue-500 shadow-md min-w-[180px] relative"
+    style="width: fit-content;"
 >
     <!-- Input Handle: Opposite to Output -->
     <Handle
         type="target"
-        position={isRight ? Position.Left : Position.Right}
-        class="w-3 h-3 bg-gray-400"
+        position={targetPosition}
+        class="w-3 h-3 bg-gray-400 peer"
     />
+    <span class={inputLabelClass}>Input</span>
 
     <div class="font-bold text-sm text-blue-700 mb-1">
         {data.label || "Action"}
@@ -44,53 +91,12 @@
         {data.action || "Select Action"}
     </div>
 
-    <!-- Output Handles Container -->
-    <div
-        class={`absolute top-1/2 transform -translate-y-1/2 flex flex-col gap-3 ${isRight ? "right-0 -mr-3" : "left-0 -ml-3"}`}
-    >
-        <!-- Success -->
-        <div class="relative group/handle">
-            <Handle
-                type="source"
-                position={isRight ? Position.Right : Position.Left}
-                id="success"
-                class="!w-3 !h-3 !bg-green-500 !border-2 !border-white"
-                style="top: 0; position: relative;"
-            />
-            <span
-                class={`absolute top-1/2 -translate-y-1/2 text-[10px] text-green-600 font-bold opacity-0 group-hover/handle:opacity-100 transition-opacity whitespace-nowrap bg-white px-1 rounded shadow-sm ${isRight ? "left-full ml-2" : "right-full mr-2"}`}
-                >OK</span
-            >
-        </div>
-
-        <!-- Failure -->
-        <div class="relative group/handle">
-            <Handle
-                type="source"
-                position={isRight ? Position.Right : Position.Left}
-                id="failure"
-                class="!w-3 !h-3 !bg-red-500 !border-2 !border-white"
-                style="top: 0; position: relative;"
-            />
-            <span
-                class={`absolute top-1/2 -translate-y-1/2 text-[10px] text-red-600 font-bold opacity-0 group-hover/handle:opacity-100 transition-opacity whitespace-nowrap bg-white px-1 rounded shadow-sm ${isRight ? "left-full ml-2" : "right-full mr-2"}`}
-                >FAIL</span
-            >
-        </div>
-
-        <!-- Always -->
-        <div class="relative group/handle">
-            <Handle
-                type="source"
-                position={isRight ? Position.Right : Position.Left}
-                id="always"
-                class="!w-3 !h-3 !bg-gray-500 !border-2 !border-white"
-                style="top: 0; position: relative;"
-            />
-            <span
-                class={`absolute top-1/2 -translate-y-1/2 text-[10px] text-gray-600 font-bold opacity-0 group-hover/handle:opacity-100 transition-opacity whitespace-nowrap bg-white px-1 rounded shadow-sm ${isRight ? "left-full ml-2" : "right-full mr-2"}`}
-                >ANY</span
-            >
-        </div>
-    </div>
+    <!-- Output Handle -->
+    <Handle
+        type="source"
+        position={sourcePosition}
+        id="default"
+        class="w-3 h-3 bg-gray-400 peer"
+    />
+    <span class={outputLabelClass}>Output</span>
 </div>

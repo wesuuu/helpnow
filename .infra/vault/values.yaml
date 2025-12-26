@@ -1,0 +1,11 @@
+server:
+  dev:
+    enabled: true
+
+    
+  # Disable persistent storage for dev mode to keep it simple, or keep it if needed. 
+  # Dev mode defaults to in-memory but can be configured.
+  # Let's stick to simple dev defaults.
+ui:
+  enabled: true
+  serviceType: LoadBalancer

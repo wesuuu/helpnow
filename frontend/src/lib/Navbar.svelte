@@ -68,10 +68,14 @@
           <div
             class="w-8 h-8 rounded-full bg-indigo-500 flex items-center justify-center text-white font-medium"
           >
-            {$auth.user?.full_name ? $auth.user.full_name[0] : "U"}
+            <!-- Initials -->
+            {$auth.user?.first_name ? $auth.user.first_name[0] : "U"}{$auth.user
+              ?.last_name
+              ? $auth.user.last_name[0]
+              : ""}
           </div>
-          <span class="text-sm font-medium hidden md:block"
-            >{$auth.user?.full_name || "User"}</span
+          <span class="ml-3 text-sm font-medium text-gray-700"
+            >{$auth.user?.first_name} {$auth.user?.last_name || ""}</span
           >
         </button>
         <!-- Dropdown -->

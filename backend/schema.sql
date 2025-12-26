@@ -10,7 +10,9 @@ CREATE TABLE IF NOT EXISTS users (
     organization_id INTEGER REFERENCES organizations(id),
     email TEXT NOT NULL UNIQUE,
     password_hash TEXT NOT NULL,
-    full_name TEXT,
+    first_name TEXT,
+    middle_name TEXT,
+    last_name TEXT,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
@@ -18,7 +20,7 @@ CREATE TABLE IF NOT EXISTS agents (
     id SERIAL PRIMARY KEY,
     organization_id INTEGER REFERENCES organizations(id),
     name TEXT NOT NULL,
-    type TEXT NOT NULL,
+    description TEXT,
     model_config TEXT,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
@@ -62,7 +64,8 @@ CREATE TABLE IF NOT EXISTS audiences (
 CREATE TABLE IF NOT EXISTS people (
     id SERIAL PRIMARY KEY,
     organization_id INTEGER REFERENCES organizations(id),
-    full_name TEXT NOT NULL,
+    first_name TEXT,
+    last_name TEXT,
     email TEXT,
     age INTEGER,
     ethnicity TEXT,
@@ -71,6 +74,7 @@ CREATE TABLE IF NOT EXISTS people (
     last_interaction_at TIMESTAMP WITH TIME ZONE,
     score INTEGER DEFAULT 0,
     event_history JSONB,
+    meta JSONB,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
@@ -84,8 +88,7 @@ CREATE TABLE IF NOT EXISTS audience_memberships (
 CREATE TABLE IF NOT EXISTS audience_segments (
     id SERIAL PRIMARY KEY,
     audience_id INTEGER REFERENCES audiences(id),
-    name TEXT NOT NULL,
-    filters TEXT, -- JSON criteria
+    type TEXT NOT NULL,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
@@ -149,7 +152,8 @@ CREATE TABLE IF NOT EXISTS workflows (
     schedule TEXT, -- New: Cron expression or interval
     next_run_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(), -- New: For scheduling
     status TEXT DEFAULT 'ACTIVE', -- ACTIVE, PAUSED
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    UNIQUE(organization_id, name)
 );
 
 CREATE TABLE IF NOT EXISTS workflow_executions (
@@ -172,7 +176,6 @@ CREATE TABLE IF NOT EXISTS data_sources (
     organization_id INTEGER REFERENCES organizations(id),
     name TEXT NOT NULL,
     type TEXT NOT NULL, -- 'POSTGRES', 'DATABRICKS', 'WEBHOOK'
-    config TEXT, -- JSON connection details
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 

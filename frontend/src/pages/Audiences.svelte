@@ -1,6 +1,8 @@
 <script lang="ts">
     import { onMount } from "svelte";
     import Modal from "../lib/components/Modal.svelte";
+    import Table from "../lib/components/Table.svelte";
+    import { router } from "../lib/router.svelte";
 
     interface Audience {
         id: number;
@@ -10,12 +12,14 @@
 
     interface Person {
         id: number;
-        full_name: string;
+        first_name: string;
+        last_name: string;
         email?: string;
         age?: number;
         gender?: string;
         ethnicity?: string;
         location?: string;
+        interests?: string[];
         created_at: string;
     }
 
@@ -31,13 +35,43 @@
     let people = $state<Person[]>([]);
     let showAddPersonModal = $state(false);
     let newPerson = $state({
-        full_name: "",
+        first_name: "",
+        last_name: "",
         email: "",
         age: "",
         gender: "",
         ethnicity: "",
         location: "",
+        interests: [] as string[],
     });
+
+    let interestInput = $state("");
+
+    function handleInterestKeydown(e: KeyboardEvent) {
+        if (e.key === "," || e.key === "Enter") {
+            e.preventDefault();
+            const val = interestInput.trim();
+            if (val) {
+                // Remove trailing comma if user typed it
+                const cleanVal = val.replace(/,+$/, "");
+                if (cleanVal) {
+                    newPerson.interests = [...newPerson.interests, cleanVal];
+                }
+            }
+            interestInput = "";
+        } else if (
+            e.key === "Backspace" &&
+            interestInput === "" &&
+            newPerson.interests.length > 0
+        ) {
+            // Remove last interest on backspace if input is empty
+            newPerson.interests = newPerson.interests.slice(0, -1);
+        }
+    }
+
+    function removeInterest(index: number) {
+        newPerson.interests = newPerson.interests.filter((_, i) => i !== index);
+    }
 
     // Add Member State
     let selectedPersonIdToAdd = $state("");
@@ -70,6 +104,7 @@
                 organization_id: 1, // Hardcoded for MVP
                 ...newPerson,
                 age: newPerson.age ? parseInt(newPerson.age) : null,
+                interests: newPerson.interests,
             }),
         });
 
@@ -77,12 +112,14 @@
             showAddPersonModal = false;
             fetchPeople();
             newPerson = {
-                full_name: "",
+                first_name: "",
+                last_name: "",
                 email: "",
                 age: "",
                 gender: "",
                 ethnicity: "",
                 location: "",
+                interests: [],
             };
         }
     }
@@ -113,10 +150,60 @@
         fetchAudienceMembers(audience.id);
     }
 
+    function goToPerson(person: Person) {
+        router.navigate(`/people/${person.id}`);
+    }
+
     onMount(() => {
         fetchAudiences();
         fetchPeople();
     });
+
+    const personColumns = [
+        {
+            key: "first_name",
+            label: "Name",
+            class: "font-medium text-gray-900 dark:text-white",
+            format: (val: string, item: Person) =>
+                `${item.first_name} ${item.last_name}`,
+        },
+        {
+            key: "email",
+            label: "Email",
+            class: "text-gray-500 dark:text-gray-300",
+        },
+        {
+            key: "demographics",
+            label: "Demographics",
+            class: "text-gray-500 dark:text-gray-300",
+            format: (_: any, item: Person) =>
+                [item.age ? `${item.age}yo` : "", item.gender, item.ethnicity]
+                    .filter(Boolean)
+                    .join(", ") || "-",
+        },
+        {
+            key: "location",
+            label: "Location",
+            class: "text-gray-500 dark:text-gray-300",
+            format: (val: string) => val || "-",
+        },
+        {
+            key: "interests",
+            label: "Interests",
+            class: "text-gray-500 dark:text-gray-300",
+            // Will be handled by custom render in Table children if needed, or format
+            // Let's use custom format returning a string for now, or use Table's children snippet?
+            // Table supports children snippet. Let's try simple format first to match replacement complexity,
+            // or just join them. Previous implementation used badges. The Table component supports children snippet.
+            // We'll define a children snippet below in the markup.
+        },
+        {
+            key: "created_at",
+            label: "Created",
+            class: "text-gray-500 dark:text-gray-300",
+            format: (val: string) => new Date(val).toLocaleDateString(),
+        },
+    ];
 </script>
 
 <div class="space-y-6">
@@ -224,7 +311,8 @@
                                     <tr>
                                         <td
                                             class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900 dark:text-white"
-                                            >{member.full_name}</td
+                                            >{member.first_name}
+                                            {member.last_name}</td
                                         >
                                         <td
                                             class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-300"
@@ -274,73 +362,38 @@
                 </button>
             </div>
 
-            <div
-                class="bg-white dark:bg-gray-800 shadow rounded-lg overflow-hidden"
+            <Table
+                columns={personColumns}
+                data={people}
+                onRowClick={goToPerson}
             >
-                <table
-                    class="min-w-full divide-y divide-gray-200 dark:divide-gray-700"
-                >
-                    <thead class="bg-gray-50 dark:bg-gray-900">
-                        <tr>
-                            <th
-                                class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
-                                >Name</th
-                            >
-                            <th
-                                class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
-                                >Demographics</th
-                            >
-                            <th
-                                class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
-                                >Location</th
-                            >
-                            <th
-                                class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
-                                >Created</th
-                            >
-                        </tr>
-                    </thead>
-                    <tbody
-                        class="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700"
-                    >
-                        {#each people as person}
-                            <tr>
-                                <td class="px-6 py-4 whitespace-nowrap">
-                                    <div
-                                        class="text-sm font-medium text-gray-900 dark:text-white"
+                {#snippet children(item, columnKey)}
+                    {#if columnKey === "interests"}
+                        {#if item.interests && item.interests.length > 0}
+                            <div class="flex flex-wrap gap-1">
+                                {#each item.interests as interest}
+                                    <span
+                                        class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-indigo-100 text-indigo-800 dark:bg-indigo-900 dark:text-indigo-200"
                                     >
-                                        {person.full_name}
-                                    </div>
-                                    <div class="text-sm text-gray-500">
-                                        {person.email}
-                                    </div>
-                                </td>
-                                <td
-                                    class="px-6 py-4 text-sm text-gray-500 dark:text-gray-300"
-                                >
-                                    {[
-                                        person.age ? `${person.age}yo` : "",
-                                        person.gender,
-                                        person.ethnicity,
-                                    ]
-                                        .filter(Boolean)
-                                        .join(", ") || "-"}
-                                </td>
-                                <td
-                                    class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-300"
-                                    >{person.location || "-"}</td
-                                >
-                                <td
-                                    class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-300"
-                                    >{new Date(
-                                        person.created_at,
-                                    ).toLocaleDateString()}</td
-                                >
-                            </tr>
-                        {/each}
-                    </tbody>
-                </table>
-            </div>
+                                        {interest}
+                                    </span>
+                                {/each}
+                            </div>
+                        {:else}
+                            -
+                        {/if}
+                    {:else}
+                        {@const col = personColumns.find(
+                            (c) => c.key === columnKey,
+                        )}
+                        {#if col?.format}
+                            {col.format(item[columnKey], item)}
+                        {:else}
+                            {item[columnKey]}
+                        {/if}
+                    {/if}
+                {/snippet}
+            </Table>
         </div>
     {/if}
 
@@ -356,12 +409,20 @@
                     Add Person
                 </h3>
                 <div class="space-y-4">
-                    <input
-                        type="text"
-                        placeholder="Full Name"
-                        bind:value={newPerson.full_name}
-                        class="block w-full rounded-md border-gray-300 dark:bg-gray-700 px-3 py-2 border mb-2"
-                    />
+                    <div class="grid grid-cols-2 gap-4">
+                        <input
+                            type="text"
+                            placeholder="First Name"
+                            bind:value={newPerson.first_name}
+                            class="block w-full rounded-md border-gray-300 dark:bg-gray-700 px-3 py-2 border mb-2"
+                        />
+                        <input
+                            type="text"
+                            placeholder="Last Name"
+                            bind:value={newPerson.last_name}
+                            class="block w-full rounded-md border-gray-300 dark:bg-gray-700 px-3 py-2 border mb-2"
+                        />
+                    </div>
                     <input
                         type="email"
                         placeholder="Email"
@@ -394,6 +455,39 @@
                         bind:value={newPerson.location}
                         class="block w-full rounded-md border-gray-300 dark:bg-gray-700 px-3 py-2 border mb-2"
                     />
+                    <div class="mb-2">
+                        <label
+                            class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1"
+                            >Interests</label
+                        >
+                        <div
+                            class="flex flex-wrap items-center gap-2 p-2 border rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-700 bg-white"
+                        >
+                            {#each newPerson.interests as interest, i}
+                                <span
+                                    class="inline-flex items-center px-2 py-1 rounded text-sm bg-indigo-100 text-indigo-800 dark:bg-indigo-900 dark:text-indigo-200"
+                                >
+                                    {interest}
+                                    <button
+                                        type="button"
+                                        onclick={() => removeInterest(i)}
+                                        class="ml-1 text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-200 focus:outline-none"
+                                    >
+                                        &times;
+                                    </button>
+                                </span>
+                            {/each}
+                            <input
+                                type="text"
+                                placeholder={newPerson.interests.length === 0
+                                    ? "Type interest and press comma..."
+                                    : ""}
+                                bind:value={interestInput}
+                                onkeydown={handleInterestKeydown}
+                                class="flex-grow min-w-[100px] outline-none bg-transparent dark:text-white placeholder-gray-400 dark:placeholder-gray-500 text-sm"
+                            />
+                        </div>
+                    </div>
                 </div>
                 <div class="mt-6 flex justify-end space-x-3">
                     <button
@@ -427,7 +521,8 @@
                     <option value="">Select a person...</option>
                     {#each people as person}
                         <option value={person.id}
-                            >{person.full_name} ({person.email})</option
+                            >{person.first_name}
+                            {person.last_name} ({person.email})</option
                         >
                     {/each}
                 </select>

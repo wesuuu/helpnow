@@ -1,12 +1,14 @@
 package handlers
 
 import (
+	"fmt"
 	"log"
 	"net/http"
 	"time"
 
 	"github.com/labstack/echo/v4"
 	"github.com/wesuuu/helpnow/backend/db"
+	"github.com/wesuuu/helpnow/backend/secrets"
 )
 
 type DataSource struct {
@@ -14,7 +16,7 @@ type DataSource struct {
 	OrganizationID int       `json:"organization_id"`
 	Name           string    `json:"name"`
 	Type           string    `json:"type"`
-	Config         string    `json:"config"` // JSON string
+	Config         string    `json:"config,omitempty"` // JSON string
 	CreatedAt      time.Time `json:"created_at"`
 }
 
@@ -41,19 +43,55 @@ func CreateDataSource(c echo.Context) error {
 	// Hardcoded org for now, or get from context
 	ds.OrganizationID = 1
 
-	query := `INSERT INTO data_sources (organization_id, name, type, config) VALUES ($1, $2, $3, $4) RETURNING id, created_at`
-	err := db.GetDB().QueryRow(query, ds.OrganizationID, ds.Name, ds.Type, ds.Config).Scan(&ds.ID, &ds.CreatedAt)
+	// Transactional creation and encryption
+	tx, err := db.GetDB().Begin()
 	if err != nil {
-		log.Println("Error creating data source:", err)
+		log.Println("Error starting transaction:", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Database error"})
+	}
+	defer tx.Rollback()
+
+	// 1. Insert (without config) to get ID
+	query := `INSERT INTO data_sources (organization_id, name, type) VALUES ($1, $2, $3) RETURNING id, created_at`
+	err = tx.QueryRow(query, ds.OrganizationID, ds.Name, ds.Type).Scan(&ds.ID, &ds.CreatedAt)
+	if err != nil {
+		log.Println("Error inserting data source:", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to create data source"})
 	}
+
+	// 2. Store Config in Vault (KV)
+	if secrets.GlobalSecretStore == nil {
+		log.Println("Error: Secret Store not configured")
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal resource not available"})
+	}
+
+	// Parse config string to map for storage (or just store as single key map)
+	secretData := map[string]interface{}{
+		"config": ds.Config, // Store as raw string in the secret map
+	}
+
+	vaultPath := fmt.Sprintf("data_sources/%d", ds.ID)
+	err = secrets.GlobalSecretStore.Write(c.Request().Context(), vaultPath, secretData)
+	if err != nil {
+		log.Println("Error writing secret to Vault:", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to secure configuration"})
+	}
+
+	// Mask config in response
+	ds.Config = "SECRET_IN_VAULT"
+
+	if err := tx.Commit(); err != nil {
+		log.Println("Error committing transaction:", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Transaction failed"})
+	}
+
 	return c.JSON(http.StatusCreated, ds)
 }
 
 func ListDataSources(c echo.Context) error {
 	// orgID := c.QueryParam("organization_id")
 	orgID := 1 // Hardcoded
-	rows, err := db.GetDB().Query(`SELECT id, organization_id, name, type, config, created_at FROM data_sources WHERE organization_id = $1 ORDER BY created_at DESC`, orgID)
+	rows, err := db.GetDB().Query(`SELECT id, organization_id, name, type, created_at FROM data_sources WHERE organization_id = $1 ORDER BY created_at DESC`, orgID)
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to list sources"})
 	}
@@ -62,7 +100,9 @@ func ListDataSources(c echo.Context) error {
 	sources := []DataSource{}
 	for rows.Next() {
 		var ds DataSource
-		if err := rows.Scan(&ds.ID, &ds.OrganizationID, &ds.Name, &ds.Type, &ds.Config, &ds.CreatedAt); err == nil {
+		if err := rows.Scan(&ds.ID, &ds.OrganizationID, &ds.Name, &ds.Type, &ds.CreatedAt); err == nil {
+			// Mask Config
+			// It will be empty string by default as we didn't scan it
 			sources = append(sources, ds)
 		}
 	}

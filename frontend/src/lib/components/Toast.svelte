@@ -80,6 +80,7 @@
     <button
         onclick={() => toast.remove(item.id)}
         class="ml-4 text-white hover:text-gray-200 focus:outline-none"
+        aria-label="Close"
     >
         <svg
             class="w-4 h-4"

@@ -33,7 +33,7 @@
     let selectedAudienceId = "";
     let syncType = "ONE_OFF";
     let schedule = "0 0 * * *"; // Daily
-    let query = "SELECT email, full_name, location FROM users";
+    let query = "SELECT email, first_name, last_name, location FROM users";
 
     async function fetchData() {
         loading = true;
@@ -308,7 +308,7 @@
                     ></textarea>
                     <p class="text-xs text-gray-500 mt-1">
                         Must select columns mapping to Audience fields (email,
-                        full_name, location).
+                        first_name, last_name, location).
                     </p>
                 </div>
             </div>

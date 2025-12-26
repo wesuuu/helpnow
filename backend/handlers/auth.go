@@ -17,9 +17,9 @@ func Register(c echo.Context) error {
 	// TODO: Hash password properly
 	// TODO: Check if org exists or create one
 
-	query := `INSERT INTO users (email, password_hash, full_name, organization_id) VALUES ($1, $2, $3, $4) RETURNING id`
+	query := `INSERT INTO users (email, password_hash, first_name, middle_name, last_name, organization_id) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`
 	dbConn := db.GetDB()
-	err := dbConn.QueryRow(query, user.Email, user.PasswordHash, user.FullName, user.OrganizationID).Scan(&user.ID)
+	err := dbConn.QueryRow(query, user.Email, user.PasswordHash, user.FirstName, user.MiddleName, user.LastName, user.OrganizationID).Scan(&user.ID)
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to create user"})
 	}
@@ -38,7 +38,17 @@ func Login(c echo.Context) error {
 	}
 
 	// TODO: Validate password and generate JWT
-	// For now, return a mock token
+	// For now, fetch user to get details (and pretend password is valid)
+	var user models.User
+	// We only need basic details for the session
+	query := `SELECT id, organization_id, email, first_name, last_name FROM users WHERE email = $1`
+	err := db.GetDB().QueryRow(query, req.Email).Scan(&user.ID, &user.OrganizationID, &user.Email, &user.FirstName, &user.LastName)
+	if err != nil {
+		return c.JSON(http.StatusUnauthorized, map[string]string{"error": "Invalid credentials"})
+	}
 
-	return c.JSON(http.StatusOK, map[string]string{"token": "mock-jwt-token", "user_email": req.Email})
+	return c.JSON(http.StatusOK, map[string]interface{}{
+		"token": "mock-jwt-token",
+		"user":  user,
+	})
 }

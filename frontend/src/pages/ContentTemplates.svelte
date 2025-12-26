@@ -1,6 +1,7 @@
 <script lang="ts">
     import { onMount, onDestroy } from "svelte";
     import TemplateEditor from "../lib/components/TemplateEditor.svelte";
+    import Modal from "../lib/components/Modal.svelte";
     // import StudioEditor from "../lib/components/StudioEditor.svelte";
     import { toast } from "../lib/stores/toast";
     import { router } from "../lib/router.svelte.js";
@@ -13,6 +14,12 @@
         content: string; // HTML content
         schema: string; // JSON schema string
         created_at: string;
+    };
+
+    type Agent = {
+        id: number;
+        name: string;
+        type: string;
     };
 
     const DEFAULTS: Record<string, string> = {
@@ -87,6 +94,13 @@
     // Form bind variables
     let formName = "";
     let formType = "AD";
+
+    // Agent Generation
+    let showAgentModal = false;
+    let agents: Agent[] = [];
+    let selectedAgentID = "";
+    let agentPrompt = "";
+    let isGenerating = false;
 
     async function fetchTemplates() {
         loading = true;
@@ -243,7 +257,62 @@
 
     onMount(() => {
         fetchTemplates();
+        fetchAgents();
     });
+
+    async function fetchAgents() {
+        try {
+            const res = await fetch("/api/agents?org_id=1");
+            if (res.ok) {
+                agents = await res.json();
+                if (agents.length > 0) {
+                    selectedAgentID = agents[0].id.toString();
+                }
+            }
+        } catch (e) {
+            console.error("Failed to load agents", e);
+        }
+    }
+
+    async function generateContent() {
+        if (!selectedAgentID || !agentPrompt) {
+            toast.error("Please select an agent and provide a prompt");
+            return;
+        }
+
+        isGenerating = true;
+        try {
+            const res = await fetch("/api/templates/generate", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    agent_id: parseInt(selectedAgentID),
+                    prompt: agentPrompt,
+                }),
+            });
+
+            if (res.ok) {
+                const data = await res.json();
+                if (data.content) {
+                    editingTemplate!.content = data.content;
+                    // Update editor explicitly if needed
+                    if (editorMode === "visual" && visualEditor) {
+                        visualEditor.setContent(data.content);
+                    }
+                    setDirty(true);
+                    showAgentModal = false;
+                    agentPrompt = "";
+                    toast.success("Content generated successfully");
+                }
+            } else {
+                toast.error("Failed to generate content");
+            }
+        } catch (e) {
+            toast.error("Error generating content");
+        } finally {
+            isGenerating = false;
+        }
+    }
 </script>
 
 <svelte:window
@@ -387,6 +456,13 @@
                     </div>
 
                     <button
+                        class="px-3 py-2 border border-blue-300 text-blue-700 bg-blue-50 rounded hover:bg-blue-100 dark:bg-blue-900 dark:text-blue-100 dark:border-blue-700"
+                        onclick={() => (showAgentModal = true)}
+                    >
+                        Ask Agent
+                    </button>
+
+                    <button
                         class="px-4 py-2 border border-gray-300 text-gray-700 rounded hover:bg-gray-50 dark:text-gray-300 dark:border-gray-600 dark:hover:bg-gray-700"
                         onclick={() => (showPreview = true)}>Preview</button
                     >
@@ -428,12 +504,8 @@
 
             <!-- Preview Modal -->
             {#if showPreview}
-                <div
-                    class="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50 p-4"
-                >
-                    <div
-                        class="bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-4xl h-[80vh] flex flex-col"
-                    >
+                <Modal size="xl" onclose={() => (showPreview = false)}>
+                    <div class="h-[80vh] flex flex-col -m-6">
                         <div
                             class="flex justify-between items-center p-4 border-b dark:border-gray-700"
                         >
@@ -476,7 +548,123 @@
                             </div>
                         </div>
                     </div>
-                </div>
+                </Modal>
+            {/if}
+
+            <!-- Agent Modal -->
+            {#if showAgentModal}
+                <Modal size="md" onclose={() => (showAgentModal = false)}>
+                    <div class="-m-6">
+                        <div
+                            class="flex justify-between items-center p-4 border-b dark:border-gray-700"
+                        >
+                            <h3
+                                class="text-lg font-medium text-gray-900 dark:text-white"
+                            >
+                                Generate with Agent
+                            </h3>
+                            <button
+                                class="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+                                onclick={() => (showAgentModal = false)}
+                            >
+                                <svg
+                                    xmlns="http://www.w3.org/2000/svg"
+                                    class="h-6 w-6"
+                                    fill="none"
+                                    viewBox="0 0 24 24"
+                                    stroke="currentColor"
+                                >
+                                    <path
+                                        stroke-linecap="round"
+                                        stroke-linejoin="round"
+                                        stroke-width="2"
+                                        d="M6 18L18 6M6 6l12 12"
+                                    />
+                                </svg>
+                            </button>
+                        </div>
+                        <div class="p-6 space-y-4">
+                            {#if agents.length === 0}
+                                <div class="text-center py-6">
+                                    <p class="text-gray-500 mb-4">
+                                        No agents found for this organization.
+                                    </p>
+                                    <button
+                                        class="px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700"
+                                        onclick={() =>
+                                            toast.error(
+                                                "Agent creation not implemented yet",
+                                            )}
+                                    >
+                                        Add Agent
+                                    </button>
+                                </div>
+                            {:else}
+                                <div>
+                                    <div
+                                        class="flex justify-between items-center mb-1"
+                                    >
+                                        <label
+                                            class="block text-sm font-medium text-gray-700 dark:text-gray-300"
+                                            >Select Agent</label
+                                        >
+                                        <button
+                                            class="text-xs text-indigo-600 hover:text-indigo-800 dark:text-indigo-400"
+                                            onclick={() =>
+                                                toast.error(
+                                                    "Agent creation not implemented yet",
+                                                )}
+                                        >
+                                            + Add Agent
+                                        </button>
+                                    </div>
+                                    <select
+                                        bind:value={selectedAgentID}
+                                        class="w-full border rounded px-3 py-2 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+                                    >
+                                        {#each agents as agent}
+                                            <option value={agent.id.toString()}
+                                                >{agent.name} ({agent.type})</option
+                                            >
+                                        {/each}
+                                    </select>
+                                </div>
+                                <div>
+                                    <label
+                                        class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1"
+                                        >Prompt</label
+                                    >
+                                    <textarea
+                                        bind:value={agentPrompt}
+                                        rows="4"
+                                        class="w-full border rounded px-3 py-2 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+                                        placeholder="Describe current sales or content needs..."
+                                    ></textarea>
+                                </div>
+                            {/if}
+                        </div>
+                        <div
+                            class="p-4 border-t bg-gray-50 dark:bg-gray-700 dark:border-gray-600 flex justify-end space-x-3 rounded-b-lg"
+                        >
+                            <button
+                                class="px-4 py-2 bg-white border border-gray-300 rounded text-gray-700 hover:bg-gray-50"
+                                onclick={() => (showAgentModal = false)}
+                                >Cancel</button
+                            >
+                            {#if agents.length > 0}
+                                <button
+                                    class="px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700 disabled:opacity-50"
+                                    onclick={generateContent}
+                                    disabled={isGenerating || !selectedAgentID}
+                                >
+                                    {isGenerating
+                                        ? "Generating..."
+                                        : "Generate"}
+                                </button>
+                            {/if}
+                        </div>
+                    </div>
+                </Modal>
             {/if}
         </div>
     {/if}
