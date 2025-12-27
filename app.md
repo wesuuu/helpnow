@@ -115,6 +115,7 @@ We need to update the agent objects to have a configuration section. This will b
 
 - Campaigns
 - Audience Segmentation & Enrichment
+- Data brokering
 
 ## Plugins
 

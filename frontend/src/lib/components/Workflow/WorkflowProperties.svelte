@@ -2,7 +2,23 @@
     import type { Node } from "@xyflow/svelte";
     import { onMount } from "svelte";
 
-    // Props
+    // --- Types ---
+    interface FieldSchema {
+        name: string;
+        type: string;
+        required: boolean;
+        description?: string;
+        validations?: string[];
+    }
+
+    interface ComponentSchema {
+        name: string;
+        type: string;
+        description?: string;
+        fields: FieldSchema[];
+    }
+
+    // --- Props ---
     let {
         selectedNode = $bindable(null),
         sites = [],
@@ -21,10 +37,67 @@
         onClose?: () => void;
     }>();
 
-    // Derived Label
+    // --- State ---
+    let actionSchemas = $state<ComponentSchema[]>([]);
+    let logicSchemas = $state<ComponentSchema[]>([]);
+    let triggerSchemas = $state<ComponentSchema[]>([]);
+    let loadingSchemas = $state(false);
+
+    // --- Derived ---
     let nodeTypeLabel = $derived(
         selectedNode?.data?.label || selectedNode?.type || "Settings",
     );
+
+    // Determine the current schema based on node selection
+    let currentSchema = $derived.by(() => {
+        if (!selectedNode) return null;
+
+        if (selectedNode.type === "ACTION") {
+            const actionName = selectedNode.data.action;
+            return actionSchemas.find((s) => s.name === actionName);
+        }
+        if (selectedNode.type === "TRIGGER") {
+            const triggerType = selectedNode.data.trigger_type;
+            return triggerSchemas.find((s) => s.name === triggerType); // e.g. "EVENT"
+        }
+        if (selectedNode.type === "CONDITION") {
+            // Default or selected logic type
+            const logicName = selectedNode.data.logic_type || "Condition";
+            return logicSchemas.find((s) => s.name === logicName);
+        }
+        return null;
+    });
+
+    // --- Fetch Schemas ---
+    onMount(async () => {
+        loadingSchemas = true;
+        try {
+            const [actionsRes, logicRes, triggersRes] = await Promise.all([
+                fetch("/api/workflow-components/actions"),
+                fetch("/api/workflow-components/logic"),
+                fetch("/api/workflow-components/triggers"),
+            ]);
+
+            if (actionsRes.ok) actionSchemas = await actionsRes.json();
+            if (logicRes.ok) logicSchemas = await logicRes.json();
+            if (triggersRes.ok) triggerSchemas = await triggersRes.json();
+        } catch (e) {
+            console.error("Failed to load component schemas", e);
+        } finally {
+            loadingSchemas = false;
+        }
+    });
+
+    // --- Helpers ---
+    function isOneOf(field: FieldSchema): string[] | null {
+        if (!field.validations) return null;
+        for (const v of field.validations) {
+            if (v.startsWith("oneof=")) {
+                return v.replace("oneof=", "").split(" ");
+            }
+        }
+        return null;
+    }
 </script>
 
 <div class="h-full bg-white text-gray-900 flex flex-col">
@@ -78,275 +151,271 @@
 
         <!-- content -->
         <div class="flex-1 overflow-y-auto p-4 space-y-6">
-            <!-- Global Node Settings -->
-            <div class="space-y-3">
-                <label
-                    for="node-name"
-                    class="block text-xs font-medium text-gray-500 uppercase"
-                    >Node Name</label
-                >
-                <input
-                    id="node-name"
-                    type="text"
-                    bind:value={selectedNode.data.label}
-                    class="block w-full bg-white border-gray-300 rounded-md text-sm text-gray-900 focus:ring-indigo-500 focus:border-indigo-500 placeholder-gray-400"
-                    placeholder="Enter node name"
-                />
-            </div>
+            {#if loadingSchemas}
+                <div class="text-sm text-gray-500 text-center py-4">
+                    Loading configuration options...
+                </div>
+            {:else}
+                <!-- Global Node Settings -->
+                <div class="space-y-3">
+                    <label
+                        for="node-name"
+                        class="block text-xs font-medium text-gray-500 uppercase"
+                        >Node Name</label
+                    >
+                    <input
+                        id="node-name"
+                        type="text"
+                        bind:value={selectedNode.data.label}
+                        class="block w-full bg-white border-gray-300 rounded-md text-sm text-gray-900 focus:ring-indigo-500 focus:border-indigo-500 placeholder-gray-400"
+                        placeholder="Enter node name"
+                    />
+                </div>
 
-            <hr class="border-gray-200" />
+                <hr class="border-gray-200" />
 
-            <!-- Trigger Specific -->
-            {#if selectedNode.type === "TRIGGER"}
+                <!-- Component Type Selection -->
                 <div class="space-y-4">
-                    <div>
-                        <label
-                            for="trigger-type"
-                            class="block text-xs font-medium text-gray-500 uppercase mb-2"
-                            >Trigger Type</label
-                        >
-                        <select
-                            id="trigger-type"
-                            bind:value={selectedNode.data.trigger_type}
-                            class="block w-full bg-white border-gray-300 rounded-md text-sm text-gray-900 focus:ring-indigo-500 focus:border-indigo-500"
-                        >
-                            <option value="EVENT">Event Based</option>
-                            <option value="SCHEDULE">Scheduled</option>
-                        </select>
-                    </div>
-
-                    {#if selectedNode.data.trigger_type === "EVENT"}
+                    {#if selectedNode.type === "ACTION"}
                         <div>
                             <label
-                                for="event-name"
+                                for="action-type"
                                 class="block text-xs font-medium text-gray-500 uppercase mb-2"
-                                >Event Name</label
+                                >Action Type</label
                             >
                             <select
-                                id="event-name"
-                                bind:value={selectedNode.data.trigger_event}
+                                id="action-type"
+                                bind:value={selectedNode.data.action}
                                 class="block w-full bg-white border-gray-300 rounded-md text-sm text-gray-900 focus:ring-indigo-500 focus:border-indigo-500"
                             >
-                                <option value="">Select Event...</option>
-                                {#each uniqueEventNames as name}
-                                    <option value={name}>{name}</option>
+                                <option value="">Select Action...</option>
+                                {#each actionSchemas as schema}
+                                    <option value={schema.name}
+                                        >{schema.name}</option
+                                    >
                                 {/each}
-                                <!-- Manually add Email Opened if not in list yet? -->
-                                <option value="email_opened"
-                                    >email_opened</option
-                                >
-                                <option value="webhook_received"
-                                    >webhook_received</option
-                                >
                             </select>
                         </div>
-
-                        <div>
-                            <span
-                                class="block text-xs font-medium text-gray-500 uppercase mb-2"
-                                >Filter Sites</span
-                            >
-                            <div
-                                class="bg-white border border-gray-300 rounded p-2 max-h-32 overflow-y-auto"
-                            >
-                                {#each sites as site}
-                                    <label
-                                        class="flex items-center text-sm py-1"
-                                    >
-                                        <input
-                                            type="checkbox"
-                                            bind:group={
-                                                selectedNode.data.site_ids
-                                            }
-                                            value={site.id}
-                                            class="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 mr-2"
-                                        />
-                                        <span class="text-gray-700"
-                                            >{site.name}</span
-                                        >
-                                    </label>
-                                {/each}
-                            </div>
-                        </div>
-                    {:else}
+                    {:else if selectedNode.type === "TRIGGER"}
                         <div>
                             <label
-                                for="cron-expression"
+                                for="trigger-type"
                                 class="block text-xs font-medium text-gray-500 uppercase mb-2"
-                                >Cron Expression</label
+                                >Trigger Type</label
                             >
-                            <input
-                                id="cron-expression"
-                                type="text"
-                                bind:value={selectedNode.data.cron}
-                                placeholder="0 9 * * *"
-                                class="block w-full bg-white border-gray-300 rounded-md text-sm text-gray-900 focus:ring-indigo-500 focus:border-indigo-500 font-mono"
-                            />
-                            <p class="text-xs text-gray-500 mt-1">
-                                e.g. 0 9 * * * (Daily at 9am)
-                            </p>
+                            <select
+                                id="trigger-type"
+                                bind:value={selectedNode.data.trigger_type}
+                                class="block w-full bg-white border-gray-300 rounded-md text-sm text-gray-900 focus:ring-indigo-500 focus:border-indigo-500"
+                            >
+                                <option value="">Select Trigger...</option>
+                                {#each triggerSchemas as schema}
+                                    <option value={schema.name}
+                                        >{schema.name}</option
+                                    >
+                                {/each}
+                            </select>
                         </div>
+                    {:else if selectedNode.type === "CONDITION"}
+                        <!-- Logic types are less varied for now, but keeping dynamic -->
                     {/if}
 
-                    <div class="pt-4 border-t border-gray-200">
-                        <span
-                            class="block text-xs font-medium text-gray-500 uppercase mb-2"
-                            >Audiences</span
-                        >
-                        <div
-                            class="bg-white border border-gray-300 rounded p-2 max-h-32 overflow-y-auto"
-                        >
-                            {#each audiences as audience}
-                                <label class="flex items-center text-sm py-1">
-                                    <input
-                                        type="checkbox"
-                                        bind:group={
-                                            selectedNode.data.audience_ids
-                                        }
-                                        value={audience.id}
-                                        class="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 mr-2"
-                                    />
-                                    <span class="text-gray-700"
-                                        >{audience.name}</span
+                    <!-- Dynamic Fields -->
+                    {#if currentSchema}
+                        <div class="space-y-5 pt-2">
+                            <!-- Helper: Schema Description -->
+                            {#if currentSchema.description}
+                                <p class="text-xs text-gray-500 italic">
+                                    {currentSchema.description}
+                                </p>
+                            {/if}
+
+                            {#each currentSchema.fields as field}
+                                <div class="space-y-2">
+                                    <label
+                                        for={field.name}
+                                        class="block text-xs font-medium text-gray-500 uppercase"
                                     >
-                                </label>
+                                        {field.name.replace(/_/g, " ")}
+                                        {#if field.required}
+                                            <span class="text-red-500">*</span>
+                                        {/if}
+                                    </label>
+
+                                    <!-- Render Input Based on Field Name (Rich Widgets) or Type -->
+                                    {#if field.name === "site_ids"}
+                                        <!-- SITE SELECTOR -->
+                                        <div
+                                            class="bg-white border border-gray-300 rounded p-2 max-h-32 overflow-y-auto"
+                                        >
+                                            {#each sites as site}
+                                                <label
+                                                    class="flex items-center text-sm py-1"
+                                                >
+                                                    <input
+                                                        type="checkbox"
+                                                        bind:group={
+                                                            selectedNode.data[
+                                                                field.name
+                                                            ]
+                                                        }
+                                                        value={site.id}
+                                                        class="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 mr-2"
+                                                    />
+                                                    <span class="text-gray-700"
+                                                        >{site.name}</span
+                                                    >
+                                                </label>
+                                            {/each}
+                                        </div>
+                                    {:else if field.name === "audience_ids"}
+                                        <!-- AUDIENCE SELECTOR -->
+                                        <div
+                                            class="bg-white border border-gray-300 rounded p-2 max-h-32 overflow-y-auto"
+                                        >
+                                            {#each audiences as audience}
+                                                <label
+                                                    class="flex items-center text-sm py-1"
+                                                >
+                                                    <input
+                                                        type="checkbox"
+                                                        bind:group={
+                                                            selectedNode.data[
+                                                                field.name
+                                                            ]
+                                                        }
+                                                        value={audience.id}
+                                                        class="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 mr-2"
+                                                    />
+                                                    <span class="text-gray-700"
+                                                        >{audience.name}</span
+                                                    >
+                                                </label>
+                                            {/each}
+                                        </div>
+                                    {:else if field.name === "template_id"}
+                                        <!-- TEMPLATE SELECTOR -->
+                                        <div class="flex flex-col gap-2">
+                                            <div
+                                                class="flex justify-between items-center"
+                                            >
+                                                <span
+                                                    class="text-[10px] text-gray-400"
+                                                    >Select ID</span
+                                                >
+                                                {#if onCreateTemplate}
+                                                    <button
+                                                        type="button"
+                                                        onclick={onCreateTemplate}
+                                                        class="text-xs text-indigo-600 hover:text-indigo-500 font-medium"
+                                                        >+ New Template</button
+                                                    >
+                                                {/if}
+                                            </div>
+                                            <select
+                                                id={field.name}
+                                                bind:value={
+                                                    selectedNode.data[
+                                                        field.name
+                                                    ]
+                                                }
+                                                class="block w-full bg-white border-gray-300 rounded-md text-sm text-gray-900 focus:ring-indigo-500 focus:border-indigo-500"
+                                            >
+                                                <option value=""
+                                                    >Select Template...</option
+                                                >
+                                                {#each emailTemplates as t}
+                                                    <option value={t.id}
+                                                        >{t.name}</option
+                                                    >
+                                                {/each}
+                                            </select>
+                                        </div>
+                                    {:else if field.name === "trigger_event"}
+                                        <!-- EVENT NAME SELECTOR -->
+                                        <select
+                                            id={field.name}
+                                            bind:value={
+                                                selectedNode.data[field.name]
+                                            }
+                                            class="block w-full bg-white border-gray-300 rounded-md text-sm text-gray-900 focus:ring-indigo-500 focus:border-indigo-500"
+                                        >
+                                            <option value=""
+                                                >Select Event...</option
+                                            >
+                                            {#each uniqueEventNames as name}
+                                                <option value={name}
+                                                    >{name}</option
+                                                >
+                                            {/each}
+                                            <!-- Fallbacks if not in definitions yet -->
+                                            {#if !uniqueEventNames.includes("email_opened")}
+                                                <option value="email_opened"
+                                                    >email_opened</option
+                                                >
+                                            {/if}
+                                            {#if !uniqueEventNames.includes("webhook_received")}
+                                                <option value="webhook_received"
+                                                    >webhook_received</option
+                                                >
+                                            {/if}
+                                        </select>
+                                    {:else}
+                                        <!-- GENERIC FIELDS -->
+                                        {#if isOneOf(field)}
+                                            <!-- ONEOF DROPDOWN -->
+                                            <select
+                                                id={field.name}
+                                                bind:value={
+                                                    selectedNode.data[
+                                                        field.name
+                                                    ]
+                                                }
+                                                class="block w-full bg-white border-gray-300 rounded-md text-sm text-gray-900 focus:ring-indigo-500 focus:border-indigo-500"
+                                            >
+                                                {#each isOneOf(field) || [] as opt}
+                                                    <option value={opt}
+                                                        >{opt}</option
+                                                    >
+                                                {/each}
+                                            </select>
+                                        {:else if field.type.includes("int") || field.type.includes("float")}
+                                            <!-- NUMBER INPUT -->
+                                            <input
+                                                id={field.name}
+                                                type="number"
+                                                bind:value={
+                                                    selectedNode.data[
+                                                        field.name
+                                                    ]
+                                                }
+                                                class="block w-full bg-white border-gray-300 rounded-md text-sm text-gray-900 focus:ring-indigo-500 focus:border-indigo-500"
+                                            />
+                                        {:else}
+                                            <!-- DEFAULT STRING INPUT -->
+                                            <input
+                                                id={field.name}
+                                                type="text"
+                                                bind:value={
+                                                    selectedNode.data[
+                                                        field.name
+                                                    ]
+                                                }
+                                                class="block w-full bg-white border-gray-300 rounded-md text-sm text-gray-900 focus:ring-indigo-500 focus:border-indigo-500"
+                                            />
+                                        {/if}
+                                    {/if}
+
+                                    <!-- Helper: Field Description -->
+                                    {#if field.description}
+                                        <p class="text-xs text-gray-500">
+                                            {field.description}
+                                        </p>
+                                    {/if}
+                                </div>
                             {/each}
                         </div>
-                    </div>
-                </div>
-
-                <!-- Action Specific -->
-            {:else if selectedNode.type === "ACTION"}
-                <div class="space-y-4">
-                    <div>
-                        <label
-                            for="action-type"
-                            class="block text-xs font-medium text-gray-500 uppercase mb-2"
-                            >Action Type</label
-                        >
-                        <select
-                            id="action-type"
-                            bind:value={selectedNode.data.action}
-                            class="block w-full bg-white border-gray-300 rounded-md text-sm text-gray-900 focus:ring-indigo-500 focus:border-indigo-500"
-                        >
-                            <option value="">Select Action...</option>
-                            <option value="Send Email">Send Email</option>
-                            <option value="Log Event">Log Event</option>
-                            <option value="Update DB">Update Database</option>
-                            <option value="HTTP Request">HTTP Request</option>
-                            <option value="Delay">Delay</option>
-                            <option value="FAIL">Simulate Failure</option>
-                        </select>
-                    </div>
-
-                    {#if selectedNode.data.action === "Send Email"}
-                        <div
-                            class="p-3 bg-gray-50 rounded border border-gray-200 space-y-3"
-                        >
-                            <div class="flex justify-between items-center">
-                                <label
-                                    for="email-template"
-                                    class="text-xs font-medium text-gray-500 uppercase"
-                                    >Email Template</label
-                                >
-                                <button
-                                    type="button"
-                                    onclick={onCreateTemplate}
-                                    class="text-xs text-indigo-600 hover:text-indigo-500 font-medium"
-                                    >+ New</button
-                                >
-                            </div>
-                            <select
-                                id="email-template"
-                                bind:value={selectedNode.data.template_id}
-                                class="block w-full bg-white border-gray-300 rounded-md text-sm text-gray-900 focus:ring-indigo-500 focus:border-indigo-500"
-                            >
-                                <option value="">Select Template...</option>
-                                {#each emailTemplates as t}
-                                    <option value={t.id}>{t.name}</option>
-                                {/each}
-                            </select>
-                        </div>
                     {/if}
-
-                    {#if selectedNode.data.action === "Delay"}
-                        <div
-                            class="p-3 bg-gray-50 rounded border border-gray-200 space-y-3"
-                        >
-                            <span
-                                class="text-xs font-medium text-gray-500 uppercase"
-                                >Delay Duration</span
-                            >
-                            <div class="grid grid-cols-2 gap-2">
-                                <div>
-                                    <span
-                                        class="text-xs text-gray-500 block mb-1"
-                                        >Days</span
-                                    >
-                                    <input
-                                        type="number"
-                                        min="0"
-                                        bind:value={
-                                            selectedNode.data.delay_days
-                                        }
-                                        class="block w-full bg-white border-gray-300 rounded-md text-sm text-gray-900"
-                                    />
-                                </div>
-                                <div>
-                                    <span
-                                        class="text-xs text-gray-500 block mb-1"
-                                        >Hours</span
-                                    >
-                                    <input
-                                        type="number"
-                                        min="0"
-                                        bind:value={
-                                            selectedNode.data.delay_hours
-                                        }
-                                        class="block w-full bg-white border-gray-300 rounded-md text-sm text-gray-900"
-                                    />
-                                </div>
-                                <div class="col-span-2">
-                                    <span
-                                        class="text-xs text-gray-500 block mb-1"
-                                        >Minutes</span
-                                    >
-                                    <input
-                                        type="number"
-                                        min="0"
-                                        bind:value={
-                                            selectedNode.data.delay_minutes
-                                        }
-                                        class="block w-full bg-white border-gray-300 rounded-md text-sm text-gray-900"
-                                    />
-                                </div>
-                            </div>
-                        </div>
-                    {/if}
-                </div>
-
-                <!-- Condition Specific -->
-            {:else if selectedNode.type === "CONDITION"}
-                <div class="space-y-4">
-                    <div>
-                        <label
-                            for="debug-force"
-                            class="block text-xs font-medium text-gray-500 uppercase mb-2"
-                            >Debug Force Outcome</label
-                        >
-                        <select
-                            id="debug-force"
-                            bind:value={selectedNode.data.force}
-                            class="block w-full bg-white border-gray-300 rounded-md text-sm text-gray-900 focus:ring-indigo-500 focus:border-indigo-500"
-                        >
-                            <option value="">Random (Default)</option>
-                            <option value="true">Force TRUE</option>
-                            <option value="false">Force FALSE</option>
-                        </select>
-                        <p class="text-xs text-gray-500 mt-2">
-                            Advanced logic coming soon via expression builder.
-                        </p>
-                    </div>
                 </div>
             {/if}
         </div>

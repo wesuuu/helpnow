@@ -137,6 +137,14 @@ func main() {
 	e.POST("/events/definitions", handlers.CreateEventDefinition)
 	e.GET("/events/definitions", handlers.ListEventDefinitions)
 
+	// Workflow Component Introspection
+	e.GET("/workflow-components/actions", handlers.ListActions)
+	e.GET("/workflow-components/actions/:name", handlers.GetAction)
+	e.GET("/workflow-components/logic", handlers.ListLogic)
+	e.GET("/workflow-components/logic/:name", handlers.GetLogic)
+	e.GET("/workflow-components/triggers", handlers.ListTriggers)
+	e.GET("/workflow-components/triggers/:name", handlers.GetTrigger)
+
 	// Data Sources & Syncs
 	e.POST("/sources", handlers.CreateDataSource)
 	e.GET("/sources", handlers.ListDataSources)
@@ -289,11 +297,3 @@ func main() {
 	log.Println("Starting server on port " + port)
 	e.Logger.Fatal(e.Start(":" + port))
 }
-
-// Workflow Component Introspection
-e.GET("/workflow-components/actions", handlers.ListActions)
-e.GET("/workflow-components/actions/:name", handlers.GetAction)
-e.GET("/workflow-components/logic", handlers.ListLogic)
-e.GET("/workflow-components/logic/:name", handlers.GetLogic)
-e.GET("/workflow-components/triggers", handlers.ListTriggers)
-e.GET("/workflow-components/triggers/:name", handlers.GetTrigger)
