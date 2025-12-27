@@ -146,15 +146,32 @@ CREATE TABLE IF NOT EXISTS workflows (
     site_id INTEGER REFERENCES sites(id), -- Nullable now if org-level
     audience_id INTEGER REFERENCES audiences(id), -- New: Context for schedule
     name TEXT NOT NULL,
-    trigger_type TEXT NOT NULL, -- 'EVENT', 'SCHEDULE'
-    trigger_event TEXT, -- Name of event if type=EVENT
+    -- DEPRECATED: Use workflow_triggers table instead
+    trigger_type TEXT NOT NULL, -- 'EVENT', 'SCHEDULE' (deprecated)
+    trigger_event TEXT, -- Name of event if type=EVENT (deprecated)
+    schedule TEXT, -- New: Cron expression or interval (deprecated)
+    next_run_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(), -- New: For scheduling (deprecated)
+    -- END DEPRECATED
     steps TEXT NOT NULL, -- JSON array of steps
-    schedule TEXT, -- New: Cron expression or interval
-    next_run_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(), -- New: For scheduling
     status TEXT DEFAULT 'ACTIVE', -- ACTIVE, PAUSED
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     UNIQUE(organization_id, name)
 );
+
+-- Workflow Triggers: Supports multiple triggers per workflow
+CREATE TABLE IF NOT EXISTS workflow_triggers (
+    id SERIAL PRIMARY KEY,
+    workflow_id INTEGER REFERENCES workflows(id) ON DELETE CASCADE,
+    node_id TEXT NOT NULL, -- Links to a node in the workflow graph
+    type TEXT NOT NULL, -- 'EVENT', 'SCHEDULE', 'WEBHOOK'
+    config TEXT, -- JSON configuration for the trigger
+    next_run_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(), -- For scheduled triggers
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_workflow_triggers_workflow_id ON workflow_triggers(workflow_id);
+CREATE INDEX IF NOT EXISTS idx_workflow_triggers_type ON workflow_triggers(type);
+
 
 CREATE TABLE IF NOT EXISTS workflow_executions (
     id SERIAL PRIMARY KEY,

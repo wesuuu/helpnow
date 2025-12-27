@@ -156,3 +156,13 @@ Conversion metrics
 - signups
 - signins
 - downloads
+
+## Integrating various workflow actions
+
+- Users submit requests for a workflow action
+- AI bot codes this in the background
+- Submits it to beta
+- Users at their site can re-sync to beta to get the latest version of the workflow action
+
+- Once beta works and users verify this feature is ok, it graduates to pre-production review
+- after pre-production review, it graduates to production and it is just a part of the standard workflow actions

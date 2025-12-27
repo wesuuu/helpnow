@@ -4,42 +4,16 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"math/rand"
+	"reflect"
 	"strconv"
 	"time"
 
-	"github.com/wesuuu/helpnow/backend/actions"
 	"github.com/wesuuu/helpnow/backend/db"
 	"github.com/wesuuu/helpnow/backend/models"
+	"github.com/wesuuu/helpnow/backend/workflows"
 )
 
-// --- Graph Data Structures ---
-
-type NodePosition struct {
-	X float64 `json:"x"`
-	Y float64 `json:"y"`
-}
-
-type Node struct {
-	ID         string                 `json:"id"`
-	Type       string                 `json:"type"` // "TRIGGER", "ACTION", "CONDITION"
-	Label      string                 `json:"label"`
-	Properties map[string]interface{} `json:"properties"`
-	Position   NodePosition           `json:"position"`
-}
-
-type Edge struct {
-	ID     string `json:"id"`
-	Source string `json:"source"`
-	Target string `json:"target"`
-	Handle string `json:"handle"` // "default", "true", "false"
-}
-
-type Graph struct {
-	Nodes []Node `json:"nodes"`
-	Edges []Edge `json:"edges"`
-}
-
+// ScheduledExecution tracks an execution in progress
 type ScheduledExecution struct {
 	ID            int
 	WorkflowID    int
@@ -57,6 +31,7 @@ type StepResult struct {
 }
 
 func StartWorker() {
+
 	go func() {
 		ticker := time.NewTicker(5 * time.Second)
 		for range ticker.C {
@@ -67,7 +42,6 @@ func StartWorker() {
 
 func processPendingExecutions() {
 	// Query for executions that are PENDING and due
-	// Note: We're reading `steps` into `GraphJSON`.
 	rows, err := db.GetDB().Query(`
 		SELECT we.id, we.workflow_id, we.current_node_id, w.steps, we.step_results, we.has_failed, we.context 
 		FROM workflow_executions we
@@ -91,11 +65,9 @@ func processPendingExecutions() {
 }
 
 func processSingleExecution(exec ScheduledExecution) {
-	var graph Graph
+	var graph workflows.Graph
 	if err := json.Unmarshal([]byte(exec.GraphJSON), &graph); err != nil {
 		Logger.Errorf("[Worker] Failed to unmarshal graph for execution %d: %v", exec.ID, err)
-		// Fallback for legacy array-based steps?
-		// For now, fail if not graph. In a real migration we'd check `[` vs `{`.
 		markExecutionFinal(exec.ID, "FAILED", "Invalid graph JSON")
 		return
 	}
@@ -105,7 +77,6 @@ func processSingleExecution(exec ScheduledExecution) {
 		currentNodeID = exec.CurrentNodeID.String
 	} else {
 		// New execution: Find Start Node (Trigger)
-		// Assumption: The Trigger node has no incoming edges, or is explicitly Type="TRIGGER"
 		for _, n := range graph.Nodes {
 			if n.Type == string(models.NodeTypeTrigger) {
 				currentNodeID = n.ID
@@ -125,7 +96,7 @@ func processSingleExecution(exec ScheduledExecution) {
 	}
 
 	// Find the Node Object
-	var node *Node
+	var node *workflows.Node
 	for i, n := range graph.Nodes {
 		if n.ID == currentNodeID {
 			node = &graph.Nodes[i]
@@ -146,6 +117,15 @@ func processSingleExecution(exec ScheduledExecution) {
 	status := "success"
 	handleToFollow := "default" // Used for branching
 
+	// Prepare Context
+	var ctxData map[string]interface{}
+	if exec.Context.Valid {
+		json.Unmarshal([]byte(exec.Context.String), &ctxData)
+	}
+	if ctxData == nil {
+		ctxData = make(map[string]interface{})
+	}
+
 	switch models.NodeType(node.Type) {
 	case models.NodeTypeTrigger:
 		output = "Triggered"
@@ -155,35 +135,25 @@ func processSingleExecution(exec ScheduledExecution) {
 		actionType, _ := node.Properties["action"].(string)
 		output = "Executed " + actionType
 
-		// Convert Context JSON to map
-		var ctxData map[string]interface{}
-		if exec.Context.Valid {
-			json.Unmarshal([]byte(exec.Context.String), &ctxData)
-		}
+		// Look up action template
+		if actionTemplate, ok := workflows.GetAction(actionType); ok {
+			// Create a new instance of the action (to avoid shared state)
+			action := reflect.New(reflect.TypeOf(actionTemplate).Elem()).Interface().(workflows.Action)
 
-		actionCtx := actions.ActionContext{
-			ExecutionID: exec.ID,
-			NodeData:    node.Properties,
-			ContextData: ctxData,
-		}
+			// Unmarshal node properties into the action struct
+			if propBytes, err := json.Marshal(node.Properties); err == nil {
+				if err := json.Unmarshal(propBytes, action); err != nil {
+					Logger.Warnf("[Worker] Failed to unmarshal action properties: %v", err)
+				}
+			}
 
-		// Look up action
-		if action, ok := actions.Get(actionType); ok {
-			out, err := action.Execute(context.Background(), actionCtx)
+			// Execute with only context data
+			out, err := action.Execute(context.Background(), ctxData)
 			output = out
 			if err != nil {
 				status = "failed"
 				exec.HasFailed = true
 				Logger.Warnf("[Worker] Action %s failed: %v", actionType, err)
-				// In new design, Action failure doesn't branch. It just marks execution as failed (or continues if we want execution to flow)?
-				// User said: "There should be only a single handle of input and output for an action"
-				// Assuming we still want to stop on failure or continue on 'default'?
-				// If the user removed the fail handle, we likely treat it as linear.
-				// Let's keep status='failed' but handleToFollow='default' so strictly linear.
-				// But we still stop if status == "failed" later in the function (line 216).
-				// Implementation note: If we want it to Continue on error, we shouldn't return at line 219.
-				// For now, let's assume Failure STOPS the workflow (standard behavior) unless caught.
-				// Since we removed 'fail' handle, we probably just stop.
 			}
 		} else {
 			Logger.Warnf("[Worker] Unknown action type: %s", actionType)
@@ -195,32 +165,37 @@ func processSingleExecution(exec ScheduledExecution) {
 		handleToFollow = "default"
 
 	case models.NodeTypeCondition:
-		// Logic: Check properties or random
-		// For MVP, if property "force" is set, use that, else random 50/50
-		force, ok := node.Properties["force"].(string)
-		result := false
+		// Logic Support
+		logicType := "Condition" // Hardcoded for now, or property?
 
-		if ok {
-			if force == "true" {
-				result = true
+		if logicTemplate, ok := workflows.GetLogic(logicType); ok {
+			// Create a new instance of the logic
+			logic := reflect.New(reflect.TypeOf(logicTemplate).Elem()).Interface().(workflows.Logic)
+
+			// Unmarshal node properties into the logic struct
+			if propBytes, err := json.Marshal(node.Properties); err == nil {
+				if err := json.Unmarshal(propBytes, logic); err != nil {
+					Logger.Warnf("[Worker] Failed to unmarshal logic properties: %v", err)
+				}
+			}
+
+			// Evaluate with only context data
+			res, out, err := logic.Evaluate(context.Background(), ctxData)
+			if err != nil {
+				Logger.Warnf("[Worker] Logic failed: %v", err)
+				status = "failed"
+				exec.HasFailed = true
+			}
+			output = out
+			if res {
+				handleToFollow = "true"
 			} else {
-				result = false
+				handleToFollow = "false"
 			}
 		} else {
-			// Random
-			if rand.Float32() > 0.5 {
-				result = true
-			} else {
-				result = false
-			}
-		}
-
-		if result {
-			output = "Condition: True"
-			handleToFollow = "true"
-		} else {
-			output = "Condition: False"
-			handleToFollow = "false"
+			// Fallback (shouldn't happen if registered)
+			output = "Logic type not found"
+			status = "failed"
 		}
 	}
 
@@ -232,14 +207,11 @@ func processSingleExecution(exec ScheduledExecution) {
 	}, exec.HasFailed)
 
 	if status == "failed" {
-		// For now, stop on failure unless we implement error handling edges later
 		markExecutionFinal(exec.ID, "FAILED", "Node execution failed")
 		return
 	}
 
 	// --- FIND NEXT NODE ---
-	// Look for edge starting at currentNodeID with handle == handleToFollow
-	// If handleToFollow is "default" but no default edge exists, take ANY edge? No, be strict.
 	var nextNodeID string
 
 	// First try specific handle
@@ -250,7 +222,7 @@ func processSingleExecution(exec ScheduledExecution) {
 		}
 	}
 
-	// If action/trigger and no "default" edge found, maybe allow any edge (if UI doesn't use handles for simple flows)
+	// Fallback to default if no specific handle edge found (for actions)
 	if nextNodeID == "" && handleToFollow == "default" {
 		for _, edge := range graph.Edges {
 			if edge.Source == currentNodeID {
@@ -262,7 +234,7 @@ func processSingleExecution(exec ScheduledExecution) {
 
 	if nextNodeID != "" {
 		// Find next node object to check for delays
-		var nextNode *Node
+		var nextNode *workflows.Node
 		for i, n := range graph.Nodes {
 			if n.ID == nextNodeID {
 				nextNode = &graph.Nodes[i]
@@ -272,10 +244,6 @@ func processSingleExecution(exec ScheduledExecution) {
 
 		delayDuration := time.Duration(0)
 		if nextNode != nil {
-			// Extract delay properties
-			// properties map[string]interface{}, so values might be float64 (JSON default) or string
-			// We need to safely convert.
-
 			getFloat := func(key string) float64 {
 				if val, ok := nextNode.Properties[key]; ok {
 					switch v := val.(type) {

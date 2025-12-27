@@ -8,12 +8,14 @@ import (
 	"github.com/joho/godotenv"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
-	"github.com/wesuuu/helpnow/backend/actions"
 	"github.com/wesuuu/helpnow/backend/clients"
 	"github.com/wesuuu/helpnow/backend/db"
 	"github.com/wesuuu/helpnow/backend/handlers"
 	"github.com/wesuuu/helpnow/backend/scheduler"
 	"github.com/wesuuu/helpnow/backend/secrets"
+	_ "github.com/wesuuu/helpnow/backend/workflows/actions"
+	_ "github.com/wesuuu/helpnow/backend/workflows/logic"
+	_ "github.com/wesuuu/helpnow/backend/workflows/triggers"
 )
 
 func main() {
@@ -26,8 +28,7 @@ func main() {
 	// Initialize Database
 	db.InitDB()
 
-	// Register Workflow Actions
-	actions.RegisterStandardActions()
+	// Register Workflow Components (handled by init in subpackages)
 
 	// Initialize Echo
 	e := echo.New()
@@ -288,3 +289,11 @@ func main() {
 	log.Println("Starting server on port " + port)
 	e.Logger.Fatal(e.Start(":" + port))
 }
+
+// Workflow Component Introspection
+e.GET("/workflow-components/actions", handlers.ListActions)
+e.GET("/workflow-components/actions/:name", handlers.GetAction)
+e.GET("/workflow-components/logic", handlers.ListLogic)
+e.GET("/workflow-components/logic/:name", handlers.GetLogic)
+e.GET("/workflow-components/triggers", handlers.ListTriggers)
+e.GET("/workflow-components/triggers/:name", handlers.GetTrigger)

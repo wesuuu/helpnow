@@ -11,7 +11,7 @@
         addEdge,
     } from "@xyflow/svelte";
     import DeletableEdge from "./edges/DeletableEdge.svelte";
-    import ContextMenu from "./ContextMenu.svelte";
+    import ContextMenu from "../ContextMenu.svelte";
     import "@xyflow/svelte/dist/style.css";
     import TriggerNode from "./nodes/TriggerNode.svelte";
     import ActionNode from "./nodes/ActionNode.svelte";
